@@ -1,0 +1,70 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+# =============================================================================
+# PARAMETER SERAT UNTUK VISUALISASI KONSEPTUAL
+# =============================================================================
+a = 50.0          # Radius inti dalam mikrometer
+n_cladding = 1.450  # Indeks bias selubung (cladding)
+n_core_si = 1.470   # Indeks bias inti untuk Step-Index (SI)
+n_core_gi_center = 1.470 # Indeks bias di pusat inti untuk Graded-Index (GI)
+
+# Vektor jarak radial untuk plotting, dibuat simetris
+r_vec = np.linspace(-a * 1.5, a * 1.5, 500)
+
+# =============================================================================
+# FUNGSI UNTUK MENGHITUNG PROFIL INDEKS BIAS
+# =============================================================================
+
+def step_index_profile(r, core_radius, n_core, n_clad):
+    """Menghasilkan profil indeks bias Step-Index."""
+    # Membuat array dengan nilai default indeks bias cladding
+    n = np.full_like(r, n_clad)
+    # Mengubah nilai menjadi indeks bias core di dalam radius inti
+    n[np.abs(r) <= core_radius] = n_core
+    return n
+
+def graded_index_profile(r, core_radius, n_center, n_clad):
+    """Menghasilkan profil indeks bias Graded-Index (parabolik)."""
+    n = np.full_like(r, n_clad)
+    # Mask untuk area di dalam inti
+    core_mask = np.abs(r) <= core_radius
+    # Menghitung profil parabolik di dalam inti
+    n[core_mask] = n_center - (n_center - n_clad) * (r[core_mask] / core_radius)**2
+    return n
+
+# =============================================================================
+# MENGHASILKAN DATA PROFIL
+# =============================================================================
+si_profile = step_index_profile(r_vec, a, n_core_si, n_cladding)
+gi_profile = graded_index_profile(r_vec, a, n_core_gi_center, n_cladding)
+
+# =============================================================================
+# MEMBUAT PLOT GAMBAR 4.1
+# =============================================================================
+fig, ax = plt.subplots(figsize=(10, 6))
+
+# Plot kedua profil
+ax.plot(r_vec, si_profile, color='blue', linestyle='-', linewidth=2.5, label='Profil Step-Index (SI)')
+ax.plot(r_vec, gi_profile, color='red', linestyle='--', linewidth=2.5, label='Profil Graded-Index (GI)')
+
+# Menambahkan garis bantu untuk batas inti
+ax.axvline(x=a, color='gray', linestyle=':', linewidth=1.5, label=f'Batas Inti (r = {a:.0f} µm)')
+ax.axvline(x=-a, color='gray', linestyle=':', linewidth=1.5)
+
+# Menyesuaikan label, judul, dan legenda
+ax.set_title('Perbandingan Konseptual Profil Indeks Bias MMF', fontsize=16)
+ax.set_xlabel(r'Jarak Radial r ($\mu$m)', fontsize=12)
+ax.set_ylabel('Indeks Bias n(r)', fontsize=12)
+ax.legend(fontsize=11)
+ax.grid(True, which='both', linestyle='--', linewidth=0.5)
+
+# Menyesuaikan batas plot untuk tampilan yang baik
+ax.set_xlim(-a * 1.5, a * 1.5)
+ax.set_ylim(n_cladding - 0.005, n_core_si + 0.005)
+
+plt.tight_layout()
+plt.savefig('Gambar_4_1_Profil_Indeks_Komparatif.png')
+plt.show()
+
+print("Plot telah disimpan sebagai 'Gambar_4_1_Profil_Indeks_Komparatif.png'")
