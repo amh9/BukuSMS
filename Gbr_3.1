@@ -1,0 +1,97 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.special import j0
+
+# Mengatur gaya plot agar terlihat profesional dan jelas
+plt.style.use('seaborn-v0_8-whitegrid')
+plt.rcParams['font.family'] = 'serif'
+plt.rcParams['figure.dpi'] = 150
+
+# =============================================================================
+# 1. FUNGSI UNTUK PROFIL MEDAN RADIAL
+# =============================================================================
+
+def step_index_mode_profile(r_array, core_radius, U_val):
+    """
+    Menghitung profil medan radial F_m(r) untuk mode LP0m.
+    Fungsi ini menerapkan syarat batas: medan adalah nol di luar inti.
+    
+    Args:
+        r_array (array): Vektor posisi radial.
+        core_radius (float): Radius inti serat (a).
+        U_val (float): Akar ke-m dari fungsi Bessel J0.
+        
+    Returns:
+        array: Profil medan yang ternormalisasi.
+    """
+    # Inisialisasi profil dengan nilai nol untuk semua r
+    profile = np.zeros_like(r_array)
+    
+    # Tentukan indeks di mana r berada di dalam atau sama dengan radius inti
+    core_indices = np.where(r_array <= core_radius)
+    
+    # Hitung nilai fungsi Bessel hanya untuk r di dalam inti
+    r_in_core = r_array[core_indices]
+    profile[core_indices] = j0(U_val * r_in_core / core_radius)
+    
+    return profile
+
+# =============================================================================
+# 2. PARAMETER SIMULASI
+# =============================================================================
+
+# Parameter fisik serat MMF
+core_radius_a = 50.0  # Radius inti dalam mikrometer
+
+# Nilai U_m adalah akar ke-m dari J0(x)=0
+U_values = {
+    'LP_{01}': 2.405,
+    'LP_{02}': 5.520,
+    'LP_{03}': 8.654
+}
+
+# Membuat vektor posisi radial untuk diplot
+# Plot sedikit melebihi radius inti untuk menunjukkan medan di cladding adalah nol
+radial_vector = np.linspace(0, core_radius_a * 1.2, 500)
+
+# =============================================================================
+# 3. VISUALISASI PLOT
+# =============================================================================
+
+fig, ax = plt.subplots(figsize=(10, 6))
+
+# Gaya plot untuk setiap mode
+colors = ['darkblue', 'crimson', 'darkgreen']
+linestyles = ['-', '--', ':']
+
+# Looping untuk memplot setiap mode
+for i, (mode_name, U_val) in enumerate(U_values.items()):
+    field_profile = step_index_mode_profile(radial_vector, core_radius_a, U_val)
+    ax.plot(radial_vector, field_profile, 
+            label=mode_name, 
+            color=colors[i],
+            linestyle=linestyles[i], 
+            linewidth=2.5)
+
+# Menambahkan elemen visual bantu
+ax.axvline(x=core_radius_a, color='black', linestyle='-.', lw=1.5, 
+           label=f'Batas Inti (a = {core_radius_a:.0f} µm)')
+ax.axhline(y=0, color='gray', linestyle='-', lw=0.7)
+
+# Mengatur judul dan label sumbu
+# Judul menggunakan format LaTeX untuk simbol matematika
+ax.set_title(f"Ilustrasi Profil Medan Radial ($F_m(r)$) untuk Mode $LP_{{0m}}$", 
+             fontsize=16, weight='bold')
+ax.set_xlabel("Posisi Radial, r (µm)", fontsize=12)
+ax.set_ylabel("Amplitudo Medan Normalisasi", fontsize=12)
+
+# Mengatur legenda dan batas plot
+ax.legend(fontsize=11)
+ax.grid(True, which='both', linestyle='--', linewidth=0.5)
+ax.set_xlim(0, core_radius_a * 1.2)
+ax.set_ylim(-0.45, 1.05)
+
+# Menyimpan gambar
+# plt.savefig("gambar_3_1_bessel_profiles.png", dpi=300, bbox_inches='tight')
+
+plt.show()
