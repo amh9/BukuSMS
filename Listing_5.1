@@ -1,0 +1,171 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.special import jv, kv, jn_zeros
+from scipy.optimize import root_scalar
+from scipy.integrate import simpson
+import time
+
+# --- 1. Pengaturan Tampilan Plot ---
+plt.style.use('seaborn-v0_8-whitegrid')
+plt.rcParams['font.family'] = 'serif'
+plt.rcParams['figure.dpi'] = 150
+
+# =============================================================================
+# 2. FUNGSI-FUNGSI FISIKA 
+# =============================================================================
+
+def characteristic_equation(U, V, l):
+    """
+    Persamaan karakteristik transendental untuk mode LP_lm (versi stabil).
+    """
+    if U <= 1e-9 or V <= U: return np.inf
+    W = np.sqrt(V**2 - U**2)
+    if l == 0:
+        return U * jv(1, U) * kv(0, W) - W * kv(1, W) * jv(0, U)
+    else:
+        return U * jv(l - 1, U) * kv(l, W) + W * kv(l - 1, W) * jv(l, U)
+
+def get_si_modes(params, num_modes):
+    """
+    Menghitung konstanta propagasi (beta) dan profil medan (F_m) untuk MMF SI
+    (versi yang telah diperbaiki).
+    """
+    n_co, n_cl, a, lambda_0 = params['n_co'], params['n_cl'], params['a'], params['lambda_0']
+    k0 = 2 * np.pi / lambda_0
+    V = k0 * a * np.sqrt(n_co**2 - n_cl**2)
+    betas, mode_profiles = [], []
+    r_vec = np.linspace(0, a * 2.5, 1000)
+
+    for m in range(1, num_modes + 1):
+        # Logika penentuan batas dan cutoff yang lebih robust
+        if m == 1: # Untuk mode fundamental LP0m
+            cutoff_zeros = jn_zeros(0, m)
+            u_min, u_max = 0.0, cutoff_zeros[m-1]
+            v_cutoff = u_min 
+        else: # Untuk mode orde tinggi LP0m
+            cutoff_zeros = jn_zeros(1, m)
+            v_cutoff = cutoff_zeros[m-2]
+            bracket_zeros = jn_zeros(0,m)
+            u_min = bracket_zeros[m-2]
+            u_max = bracket_zeros[m-1]
+
+        if V <= v_cutoff: continue
+
+        try:
+            sol = root_scalar(characteristic_equation, args=(V, 0), bracket=[u_min + 1e-7, min(u_max, V) - 1e-7])
+            if sol.converged:
+                U = sol.root
+                beta = np.sqrt((k0 * n_co)**2 - (U / a)**2)
+                betas.append(beta)
+
+                core_mask = r_vec <= a
+                field_profile = np.zeros_like(r_vec)
+                field_profile[core_mask] = jv(0, U * r_vec[core_mask] / a)
+                W = np.sqrt(V**2 - U**2)
+                scale_factor = jv(0, U) / kn(0, W)
+                field_profile[~core_mask] = scale_factor * kn(0, W * r_vec[~core_mask] / a)
+                norm_const = np.sqrt(2 * np.pi * simpson(field_profile**2 * r_vec, r_vec))
+                
+                if norm_const > 1e-9:
+                    mode_profiles.append(field_profile / norm_const)
+                else:
+                    betas.pop()
+        except ValueError:
+            continue
+            
+    return np.array(betas), np.array(mode_profiles), r_vec
+
+def get_excitation_coeffs(smf_profile, mmf_profiles, r_vec):
+    """Menghitung koefisien eksitasi c_m."""
+    coeffs = [2 * np.pi * simpson(smf_profile * mmf_profile * r_vec, r_vec) for mmf_profile in mmf_profiles]
+    return np.array(coeffs)
+
+def calculate_coupling_loss(coeffs, betas, z_length):
+    """Menghitung coupling loss (dB) pada panjang z."""
+    if len(coeffs) == 0: return 90.0
+    transmitted_power = np.abs(np.sum(coeffs**2 * np.exp(1j * betas * z_length)))**2
+    return 10 * np.log10(transmitted_power) if transmitted_power > 1e-9 else 90.0
+
+# =============================================================================
+# 3. PARAMETER DAN PERHITUNGAN SIMULASI
+# =============================================================================
+mmf_params = {
+    'n_co': 1.4446,
+    'n_cl': 1.4271,
+    'a': 52.5e-6,
+    'lambda_0': 1.55e-6
+}
+smf_params = {'w_s': 4.1e-6}
+num_modes_to_calculate = 15
+
+print("1. Menghitung mode-mode MMF (hanya sekali)...")
+betas, mmf_profiles, r_vec = get_si_modes(mmf_params, num_modes_to_calculate)
+print(f"   {len(betas)} mode berhasil dihitung.")
+
+print("2. Menghitung koefisien eksitasi (hanya sekali)...")
+smf_field_profile = (1 / (np.sqrt(np.pi) * smf_params['w_s'])) * np.exp(-0.5 * (r_vec / smf_params['w_s'])**2)
+coeffs = get_excitation_coeffs(smf_field_profile, mmf_profiles, r_vec)
+
+print("3. Menghitung kurva respons sensor...")
+z_start = 0.041 # 41 mm
+z_end = 0.045   # 45 mm
+z_vec_m = np.linspace(z_start, z_end, 1000)
+coupling_loss_db = np.array([calculate_coupling_loss(coeffs, betas, z) for z in z_vec_m])
+print("   Perhitungan selesai.")
+
+# --- Mencari Titik Operasi Optimal ---
+sensitivity = np.abs(np.gradient(coupling_loss_db, z_vec_m))
+optimal_idx = np.argmax(sensitivity)
+L0_m = z_vec_m[optimal_idx]
+Loss_at_L0 = coupling_loss_db[optimal_idx]
+
+# --- Simulasi Perubahan Kecil (Stimulus) ---
+delta_L = 5e-6
+L_start_op = L0_m - delta_L / 2
+L_end_op = L0_m + delta_L / 2
+Loss_start_op = calculate_coupling_loss(coeffs, betas, L_start_op)
+Loss_end_op = calculate_coupling_loss(coeffs, betas, L_end_op)
+
+# =============================================================================
+# 4. VISUALISASI HASIL
+# =============================================================================
+print("4. Membuat plot...")
+fig, ax = plt.subplots(figsize=(10, 7))
+
+ax.plot(z_vec_m * 1000, coupling_loss_db, color='navy', linewidth=2, label='Respons Sensor')
+ax.plot(L0_m * 1000, Loss_at_L0, 'o', color='red', markersize=10, label='Titik Operasi Optimal', zorder=5)
+
+# Menyorot perubahan kecil pada panjang (stimulus)
+ax.axvspan((L_start_op) * 1000, (L_end_op) * 1000, color='orange', alpha=0.3, label=f'Perubahan Panjang ($\\Delta L$)')
+ax.annotate('Stimulus\n($\\Delta L$)', 
+            xy=(L0_m * 1000, -28), xytext=(L0_m * 1000 - 0.5, -32),
+            arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=0.3", color='black'),
+            ha='center', va='center', fontsize=11, bbox=dict(boxstyle='round,pad=0.3', fc='wheat', alpha=0.8))
+
+# Menyorot perubahan besar pada loss (sinyal terukur)
+ax.axhspan(min(Loss_start_op, Loss_end_op), max(Loss_start_op, Loss_end_op), color='lightgreen', alpha=0.5, zorder=0)
+ax.annotate('Sinyal Terukur\n($\\Delta P$)', 
+            xy=(L0_m*1000 + 0.1, Loss_at_L0), xytext=(L0_m*1000 + 0.8, Loss_at_L0 - 3),
+            arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=-0.3", color='black'),
+            ha='center', va='center', fontsize=11, bbox=dict(boxstyle='round,pad=0.3', fc='wheat', alpha=0.8))
+            
+# Anotasi titik operasi
+ax.annotate('Sensitivitas Maksimum\n(Kemiringan Paling Curam)', 
+            xy=(L0_m*1000, Loss_at_L0), xytext=(z_vec_m.min()*1000 + 0.2, -5),
+            arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=0.2", color='black'),
+            ha='left', va='center', fontsize=11)
+
+# Pengaturan Judul dan Label
+ax.set_title('Ilustrasi Prinsip Kerja Sensor Intensitas Berbasis SMS-SI', fontsize=14, weight='bold')
+ax.set_xlabel('Panjang MMF (mm)', fontsize=12)
+ax.set_ylabel('Coupling Loss (dB)', fontsize=12)
+ax.legend(loc='lower left')
+ax.grid(True, linestyle=':', which='both')
+ax.set_ylim(-35, 0)
+ax.set_xlim(z_start*1000, z_end*1000)
+
+plt.tight_layout()
+plt.savefig("gambar_5_simulasi_sensor_intensitas.png", dpi=300)
+plt.show()
+
+print("Plot telah disimpan sebagai 'gambar_5_simulasi_sensor_intensitas.png'")
