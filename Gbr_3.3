@@ -1,0 +1,28 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+# --- Pengaturan Plot ---
+plt.style.use('seaborn-v0_8-whitegrid')
+plt.rcParams['font.family'] = 'serif'
+
+# --- Data Konseptual ---
+# Mensimulasikan bahwa galat meningkat secara kuadratik dengan nomor mode
+mode_number = np.arange(1, 15)
+# Faktor skala dipilih agar sesuai dengan visual pada buku
+error_scale_factor = 15.0 
+error = error_scale_factor * mode_number**2
+
+# --- Visualisasi ---
+fig, ax = plt.subplots(figsize=(8, 6))
+
+ax.plot(mode_number, error, lw=2.5, color='darkblue')
+
+# Mengatur Judul dan Label
+ax.set_title("Analisis Galat Metode Aproksimasi", fontsize=16)
+ax.set_xlabel("Nomor Mode", fontsize=12)
+ax.set_ylabel("Galat Propagasi Relatif (a.u.)", fontsize=12)
+ax.set_xlim(left=0)
+ax.set_ylim(bottom=0)
+ax.grid(True, which='both', linestyle=':')
+
+plt.show()
