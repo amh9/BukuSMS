@@ -1,0 +1,148 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.special import jv, kv, jn_zeros
+from scipy.optimize import root_scalar
+import time
+
+# --- 1. Pengaturan Tampilan Plot ---
+# Mengatur gaya plot agar terlihat profesional dan sesuai untuk buku ajar
+plt.style.use('seaborn-v0_8-whitegrid')
+plt.rcParams['font.family'] = 'serif'
+plt.rcParams['figure.dpi'] = 150
+
+# =============================================================================
+# 2. FUNGSI FISIKA (TELAH DIPERIKSA DAN DIPERBAIKI)
+# =============================================================================
+
+def characteristic_equation(U, V, l):
+    """
+    Persamaan karakteristik transendental untuk mode LP_lm.
+    Bentuk f(U) = 0 untuk pencarian akar. Dibuat stabil secara numerik.
+    """
+    # Menghindari error pada batas-batas U atau ketika V <= U
+    if U <= 1e-9 or V <= U:
+        return np.inf
+        
+    W = np.sqrt(V**2 - U**2)
+    
+    # Menggunakan bentuk perkalian yang lebih stabil secara numerik
+    if l == 0:
+        # Untuk l=0, persamaan menjadi U*J1/J0 = W*K1/K0
+        # Diubah menjadi f(U) = U*J1*K0 - W*K1*J0 = 0
+        return U * jv(1, U) * kv(0, W) - W * kv(1, W) * jv(0, U)
+    else:
+        # Untuk l>0, persamaan menjadi U*J_{l-1}/J_l = -W*K_{l-1}/K_l
+        # Diubah ke bentuk perkalian silang: f(U) = U*J_{l-1}*K_l + W*K_{l-1}*J_l = 0
+        return U * jv(l - 1, U) * kv(l, W) + W * kv(l - 1, W) * jv(l, U)
+
+
+def find_b_values_for_mode(v_range, l, m):
+    """
+    Menemukan nilai konstanta propagasi normalisasi (b) untuk satu mode LP_lm
+    di sepanjang rentang V-number.
+    """
+    b_values = np.full_like(v_range, np.nan)
+    
+    # --- PERBAIKAN UTAMA: Logika Penentuan Batas dan Cutoff ---
+    # 1. Tentukan V_cutoff teoretis untuk setiap mode.
+    #    Cutoff untuk mode LP_lm adalah nol ke-m dari J_{l-1} = 0.
+    if l == 0 and m == 1:
+        v_cutoff = 0.0  # Mode fundamental LP01 tidak memiliki cutoff
+    else:
+        # Untuk l=0, J_{l-1} -> J_{-1} = -J_1. Jadi kita cari nol dari J1.
+        order_for_cutoff = l - 1 if l > 0 else 1
+        cutoff_zeros = jn_zeros(order_for_cutoff, m)
+        v_cutoff = cutoff_zeros[m - 1]
+
+    # 2. Tentukan rentang pencarian U (bracket).
+    #    Akar U untuk mode LP_lm terletak di antara nol ke-(m-1) dan ke-m dari J_l.
+    bracket_zeros = jn_zeros(l, m)
+    u_min = bracket_zeros[m-2] if m > 1 else 0.0
+    u_max = bracket_zeros[m-1]
+
+    for i, V in enumerate(v_range):
+        # Hanya cari akar jika V berada di atas V_cutoff
+        if V > v_cutoff:
+            # Batas atas pencarian U juga tidak bisa melebihi V
+            current_u_max = min(u_max, V)
+            
+            # Pastikan bracket valid (u_min < current_u_max)
+            if u_min < current_u_max:
+                try:
+                    sol = root_scalar(characteristic_equation, args=(V, l), 
+                                      bracket=[u_min + 1e-7, current_u_max - 1e-7])
+                    if sol.converged:
+                        U = sol.root
+                        b = 1 - (U / V)**2
+                        b_values[i] = b
+                except ValueError:
+                    # Terjadi jika bracket tidak valid, lewati titik ini
+                    continue
+                
+    return b_values
+
+# =============================================================================
+# 3. PARAMETER SIMULASI
+# =============================================================================
+# Rentang V-number
+v_range = np.linspace(0, 10, 400)
+
+# Mode LP_lm yang akan diplot, dalam format {label: (l, m)}
+modes_to_plot = {
+    '$LP_{01}$': (0, 1),
+    '$LP_{11}$': (1, 1),
+    '$LP_{21}$': (2, 1),
+    '$LP_{02}$': (0, 2),
+    '$LP_{31}$': (3, 1),
+    '$LP_{12}$': (1, 2),
+}
+
+# Pengaturan gaya plot untuk setiap mode (sesuai gambar referensi)
+mode_styles = {
+    '$LP_{01}$': {'color': 'blue', 'linestyle': '-'},
+    '$LP_{11}$': {'color': 'green', 'linestyle': '-'},
+    '$LP_{21}$': {'color': 'red', 'linestyle': '-'},
+    '$LP_{02}$': {'color': 'blue', 'linestyle': '--'},
+    '$LP_{31}$': {'color': 'c', 'linestyle': '-'},
+    '$LP_{12}$': {'color': 'green', 'linestyle': '--'},
+}
+
+# =============================================================================
+# 4. LOOP PERHITUNGAN UTAMA
+# =============================================================================
+print("Memulai perhitungan Diagram V-b (ini mungkin memakan waktu)...")
+start_time = time.time()
+results = {}
+
+for label, (l, m) in modes_to_plot.items():
+    print(f"  Menghitung mode {label}...")
+    results[label] = find_b_values_for_mode(v_range, l, m)
+
+end_time = time.time()
+print(f"Perhitungan selesai dalam {end_time - start_time:.2f} detik.")
+
+# =============================================================================
+# 5. VISUALISASI HASIL
+# =============================================================================
+print("Membuat plot...")
+fig, ax = plt.subplots(figsize=(10, 7))
+
+# Plot hasil untuk setiap mode
+for label, b_vals in results.items():
+    style = mode_styles.get(label, {'color': 'black', 'linestyle': ':'})
+    ax.plot(v_range, b_vals, lw=2, label=label, **style)
+
+# Pengaturan Judul, Label, dan Batas Sumbu
+ax.set_title('Diagram V-b untuk Serat Optik Step-Index', fontsize=14, weight='bold')
+ax.set_xlabel('V-number', fontsize=12)
+ax.set_ylabel('Konstanta Propagasi Normalisasi, b', fontsize=12)
+ax.legend(fontsize=11)
+ax.set_xlim(0, 10)
+ax.set_ylim(0, 1.0)
+ax.grid(True, which='both', linestyle=':')
+
+fig.tight_layout()
+plt.savefig("gambar_1_6_diagram_vb.png", dpi=300)
+plt.show()
+
+print("Plot telah disimpan sebagai 'gambar_1_6_diagram_vb.png'")
