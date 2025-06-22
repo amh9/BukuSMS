@@ -1,0 +1,81 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Mengatur gaya plot agar terlihat profesional dan jelas
+plt.style.use('seaborn-v0_8-whitegrid')
+plt.rcParams['font.family'] = 'serif'
+plt.rcParams['figure.dpi'] = 150
+
+# =============================================================================
+# 1. MEMBUAT DATA KONSEPTUAL
+# =============================================================================
+
+# Sumbu-X: Perubahan Suhu dari 0 hingga 50 derajat Celcius
+delta_temp = np.linspace(0, 50, 100)
+
+# --- Sinyal Sensor Ideal ---
+# Pada sensor ideal, perubahan suhu tidak menghasilkan sinyal regangan.
+# Asumsi regangan aktual adalah nol.
+signal_ideal = np.zeros_like(delta_temp)
+
+# --- Sinyal Sensor Nyata ---
+# Pada sensor nyata, ada koefisien sensitivitas silang terhadap suhu.
+# Misalkan, setiap 1 C kenaikan suhu dibaca sebagai 1.2 microstrain (με).
+cross_sensitivity_coeff = 1.2  # dalam satuan με / °C
+signal_nyata = cross_sensitivity_coeff * delta_temp
+
+# =============================================================================
+# 2. VISUALISASI PLOT
+# =============================================================================
+
+fig, ax = plt.subplots(figsize=(10, 6))
+
+# Plot kedua garis data
+ax.plot(delta_temp, signal_ideal,
+        color='green', linestyle='--', linewidth=2.5,
+        label='Sensor Ideal (Tanpa Sensitivitas Silang)')
+
+ax.plot(delta_temp, signal_nyata,
+        color='crimson', linestyle='-', linewidth=2.5,
+        label='Sensor Nyata (Dengan Sensitivitas Silang)')
+
+# --- Menambahkan Anotasi untuk Menjelaskan Konsep ---
+
+# Pilih satu titik untuk diberi anotasi, misalnya pada suhu 40 C
+temp_point = 40
+strain_reading = cross_sensitivity_coeff * temp_point
+
+# Menandai titik tersebut di plot
+ax.plot(temp_point, strain_reading, 'o', color='black', markersize=8)
+
+# Menambahkan panah dan teks anotasi
+ax.annotate(
+    f'Pada $\\Delta$T = {temp_point}$^\\circ$C,\n'
+    f'sensor secara keliru melaporkan\n'
+    f'regangan sebesar {strain_reading:.0f} $\\mu\\epsilon$',
+    xy=(temp_point, strain_reading),
+    xytext=(15, strain_reading + 15),
+    arrowprops=dict(facecolor='black', shrink=0.05, width=1, headwidth=8),
+    fontsize=11,
+    bbox=dict(boxstyle='round,pad=0.5', fc='ivory', ec='gray', lw=1, alpha=0.9)
+)
+
+
+# --- Mengatur Judul, Label, dan Legenda ---
+ax.set_title("Ilustrasi Konsep Sensitivitas Silang", fontsize=16, weight='bold')
+ax.set_xlabel("Perubahan Suhu, $\\Delta$T ($^\\circ$C)", fontsize=12)
+ax.set_ylabel("Keluaran Sensor (Terbaca sebagai Regangan, $\\mu\\epsilon$)", fontsize=12)
+# PERBAIKAN: Mengganti loc='middle left' dengan loc='center left'
+ax.legend(loc='center left', fontsize=11)
+ax.grid(True, which='both', linestyle='--', linewidth=0.5)
+
+# Mengatur batas plot
+ax.set_xlim(0, 50)
+ax.set_ylim(-5, max(signal_nyata) * 1.2)
+
+
+# Menyimpan gambar ke file
+plt.savefig("gambar_6_2_cross_sensitivity.png", dpi=300, bbox_inches='tight')
+
+# Menampilkan plot
+plt.show()
