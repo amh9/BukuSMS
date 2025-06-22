@@ -1,0 +1,77 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.special import genlaguerre
+import matplotlib.gridspec as gridspec
+
+# --- FUNGSI-FUNGSI FISIKA ---
+def gaussian_profile(r, w0):
+    return np.exp(-(r**2 / w0**2))
+
+def laguerre_gaussian_mode(r, m, wM):
+    L_m = genlaguerre(m, 0)
+    x = 2 * r**2 / wM**2
+    return np.sqrt(2 / np.pi) / wM * L_m(x) * np.exp(-r**2 / wM**2)
+
+def calculate_Am_power(w_s, w_m, max_modes):
+    mu = w_s / w_m
+    powers = []
+    term1 = (2 * mu) / (1 + mu**2)
+    term2_base = (1 - mu**2) / (1 + mu**2)
+    for m in range(max_modes):
+        power = (term1**2) * (term2_base**(2*m))
+        powers.append(power)
+    return np.array(powers)
+
+# --- PARAMETER ---
+w_s = 4.5
+w_m = 10.5
+num_modes_to_show = 4
+r = np.linspace(-25, 25, 500)
+modal_powers = calculate_Am_power(w_s, w_m, num_modes_to_show)
+
+# --- VISUALISASI ---
+fig = plt.figure(figsize=(16, 7))
+gs = gridspec.GridSpec(num_modes_to_show, 3, width_ratios=[1.5, 1, 1], hspace=0.5, wspace=0.4)
+
+# Plot Medan Masukan SMF
+ax_smf = fig.add_subplot(gs[:, 0])
+smf_field = gaussian_profile(r, w_s)
+ax_smf.plot(r, smf_field, color='royalblue', linewidth=2.5)
+ax_smf.fill_between(r, smf_field, color='royalblue', alpha=0.1)
+ax_smf.set_title("Medan Masukan dari SMF", fontsize=16)
+ax_smf.set_xlabel("Posisi Radial (µm)")
+ax_smf.set_ylabel("Amplitudo Medan Normalisasi")
+ax_smf.set_xlim(-20, 20)
+ax_smf.grid(True, linestyle='--')
+
+# Panah
+ax_smf.annotate('', xy=(1.2, 0.5), xycoords='axes fraction', xytext=(0.95, 0.5),
+                arrowprops=dict(facecolor='black', shrink=0.05, width=2, headwidth=10))
+
+# Plot Profil Mode MMF
+for i in range(num_modes_to_show):
+    ax = fig.add_subplot(gs[i, 1])
+    mmf_mode = laguerre_gaussian_mode(r, i, w_m)
+    ax.plot(r, mmf_mode / np.max(np.abs(mmf_mode)), color=f'C{i+1}', linewidth=2)
+    ax.set_title(f"Profil Mode $LP_{{0{i}}}$ MMF")
+    ax.set_xlim(-25, 25)
+    ax.set_yticklabels([])
+    if i == num_modes_to_show - 1:
+        ax.set_xlabel("Posisi Radial (µm)")
+
+# Plot Distribusi Daya Modal
+ax_bar = fig.add_subplot(gs[:, 2])
+mode_labels = [f"$LP_{{0{i}}}$" for i in range(num_modes_to_show)]
+bars = ax_bar.bar(mode_labels, modal_powers, color=[f'C{i+1}' for i in range(num_modes_to_show)], alpha=0.8)
+ax_bar.set_title("Distribusi Daya Modal $(|A_m|^2)$", fontsize=16)
+ax_bar.set_ylabel("Daya Modal Relatif")
+ax_bar.set_xlabel("Mode")
+ax_bar.set_ylim(0, max(modal_powers) * 1.2)
+for bar in bars:
+    yval = bar.get_height()
+    ax_bar.text(bar.get_x() + bar.get_width()/2.0, yval + 0.01, f'{yval:.3f}', ha='center', va='bottom')
+
+fig.suptitle("Ilustrasi Konseptual Eksitasi Mode pada Antarmuka SMF-MMF", fontsize=18)
+fig.tight_layout(rect=[0, 0, 1, 0.95])
+# plt.savefig('gambar_2_3_excitation.png', dpi=300)
+plt.show()
