@@ -1,0 +1,99 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+# --- 1. Pengaturan Tampilan Plot ---
+# Mengatur gaya plot agar terlihat profesional dan sesuai untuk buku ajar
+plt.style.use('seaborn-v0_8-whitegrid')
+plt.rcParams['font.family'] = 'serif'
+plt.rcParams['figure.dpi'] = 150
+
+# =============================================================================
+# 2. DEFINISI SISTEM SENSOR
+# =============================================================================
+
+# Definisikan Matriks Sensitivitas (Hipotetis)
+# K_ij adalah sensitivitas sensor/fitur i terhadap parameter j.
+# Sensor 1: lebih sensitif terhadap Suhu.
+# Sensor 2: lebih sensitif terhadap Regangan.
+K = np.array([
+    [100, 1.5],  # S1: S_T=100 pm/°C, S_eps=1.5 pm/µstrain
+    [10, 5.0]    # S2: S_T=10 pm/°C,  S_eps=5.0 pm/µstrain
+])
+
+# Hitung matriks invers. Ini adalah kunci dari proses dekopling.
+try:
+    K_inv = np.linalg.inv(K)
+    print("Matriks Sensitivitas K:\n", K)
+    print("\nMatriks Invers K^-1:\n", K_inv)
+except np.linalg.LinAlgError:
+    print("Error: Matriks sensitivitas bersifat singular dan tidak dapat diinvers.")
+    exit()
+
+# =============================================================================
+# 3. BUAT SINYAL ASLI (GROUND TRUTH)
+# =============================================================================
+
+# Buat sumbu waktu
+waktu = np.linspace(0, 20, 100)
+
+# Buat sinyal suhu yang berosilasi secara sinusoidal
+delta_T_true = 5 * np.sin(waktu * 0.8)
+
+# Buat sinyal regangan yang meningkat secara linear
+delta_eps_true = 10 * (waktu / 20)
+
+# Gabungkan sinyal asli ke dalam sebuah matriks untuk perkalian
+true_signals = np.vstack((delta_T_true, delta_eps_true))
+
+# =============================================================================
+# 4. SIMULASI PROSES PENGUKURAN DAN PEMULIHAN SINYAL
+# =============================================================================
+
+# --- Langkah A: Sinyal Tercampur (Measured Signal) ---
+# Kalikan sinyal asli dengan matriks sensitivitas K untuk mendapatkan
+# pergeseran panjang gelombang yang akan terukur oleh detektor.
+measured_lambda_shifts = K @ true_signals
+
+# --- Langkah B: Tambahkan Noise Realistis ---
+# Tambahkan sedikit noise acak pada hasil pengukuran.
+noise_level = 0.5  # dalam satuan pm
+noise = np.random.normal(0, noise_level, measured_lambda_shifts.shape)
+noisy_measured_shifts = measured_lambda_shifts + noise
+
+# --- Langkah C: Proses Dekopling (Recovered Signal) ---
+# Pulihkan sinyal asli dengan mengalikan sinyal terukur (yang sudah ada noise)
+# dengan matriks invers K_inv.
+recovered_signals = K_inv @ noisy_measured_shifts
+
+# =============================================================================
+# 5. VISUALISASI HASIL
+# =============================================================================
+print("\nMembuat plot perbandingan...")
+
+# Membuat figur dengan dua subplot yang tersusun vertikal
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+fig.suptitle('Demonstrasi Dekopling Sinyal Suhu dan Regangan', fontsize=16, weight='bold')
+
+# --- Plot untuk Suhu ---
+ax1.plot(waktu, delta_T_true, 'k-', lw=2.5, label='Sinyal Suhu Asli (Ground Truth)')
+ax1.plot(waktu, recovered_signals[0], 'o', color='crimson', markersize=5, alpha=0.8, label='Sinyal Suhu Hasil Dekopling')
+ax1.set_ylabel('$\Delta$T (°C)', fontsize=12)
+ax1.set_title('Perbandingan Sinyal Suhu', fontsize=12)
+ax1.legend()
+ax1.grid(True, which='both', linestyle=':')
+
+# --- Plot untuk Regangan ---
+ax2.plot(waktu, delta_eps_true, 'k-', lw=2.5, label='Sinyal Regangan Asli (Ground Truth)')
+ax2.plot(waktu, recovered_signals[1], 's', color='darkblue', markersize=5, alpha=0.8, label='Sinyal Regangan Hasil Dekopling')
+ax2.set_ylabel('$\Delta\epsilon$ (µstrain)', fontsize=12)
+ax2.set_title('Perbandingan Sinyal Regangan', fontsize=12)
+ax2.set_xlabel('Waktu (s)', fontsize=12)
+ax2.legend()
+ax2.grid(True, which='both', linestyle=':')
+
+# Merapikan tata letak dan menyimpan gambar
+plt.tight_layout(rect=[0, 0, 1, 0.95])
+plt.savefig("gambar_6_simulasi_dekopling.png", dpi=300)
+plt.show()
+
+print("\nPlot telah disimpan sebagai 'gambar_6_simulasi_dekopling.png'")
