@@ -1,0 +1,124 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+# --- 1. Pengaturan Tampilan Plot ---
+# Mengatur gaya plot agar terlihat profesional dan sesuai untuk buku ajar
+plt.style.use('seaborn-v0_8-whitegrid')
+plt.rcParams['font.family'] = 'serif'
+plt.rcParams['figure.dpi'] = 150
+
+# =============================================================================
+# 2. FUNGSI-FUNGSI FISIKA
+# =============================================================================
+
+def sellemeier_silica(lambda_um):
+    """
+    Menghitung indeks bias silika murni (fused silica) sebagai fungsi
+    dari panjang gelombang. Digunakan untuk material selubung (cladding).
+    
+    Args:
+        lambda_um (float): Panjang gelombang dalam mikrometer.
+    
+    Returns:
+        float: Indeks bias.
+    """
+    lambda_sq = lambda_um**2
+    # Koefisien Sellmeier untuk silika murni (fused silica)
+    B = [0.6961663, 0.4079426, 0.8974794]
+    C_sq = [0.0684043**2, 0.1162414**2, 9.896161**2]
+    
+    n_sq = 1.0
+    for b_val, c_sq_val in zip(B, C_sq):
+        n_sq += (b_val * lambda_sq) / (lambda_sq - c_sq_val)
+    return np.sqrt(n_sq)
+
+# =============================================================================
+# 3. PARAMETER SIMULASI
+# =============================================================================
+
+# Parameter serat optik singlemode standar (misalnya, SMF-28)
+a_core_um = 4.1  # Radius inti dalam mikrometer
+doping_fraction = 0.0034 # Fraksi doping GeO2 untuk inti (menaikkan indeks bias)
+
+# Rentang panjang gelombang untuk simulasi
+wavelengths_um = np.linspace(1.2, 1.7, 201)
+
+# List untuk menyimpan hasil perhitungan
+v_numbers = []
+spot_sizes_um = []
+
+# =============================================================================
+# 4. LOOP PERHITUNGAN
+# =============================================================================
+
+print("Memulai perhitungan V-number dan Ukuran Spot Mode...")
+for wl_um in wavelengths_um:
+    # Hitung indeks bias selubung (n2) dan inti (n1)
+    n_cladding = sellemeier_silica(wl_um)
+    # Aproksimasi indeks bias inti berdasarkan fraksi doping
+    n_core = n_cladding * (1 + doping_fraction)
+    
+    # Hitung Apertur Numerik (NA)
+    NA = np.sqrt(n_core**2 - n_cladding**2)
+    
+    # Hitung V-number (Persamaan 1.3)
+    v_num = (2 * np.pi * a_core_um / wl_um) * NA
+    v_numbers.append(v_num)
+    
+    # Hitung Ukuran Spot Mode (ws) menggunakan formula Marcuse (Persamaan 1.8)
+    # Formula Marcuse valid untuk 0.8 <= V <= 2.5
+    if 0.8 <= v_num <= 2.8: # Sedikit diperluas untuk kelancaran plot
+        ws_over_a = 0.65 + 1.619 / v_num**1.5 + 2.879 / v_num**6
+        ws = ws_over_a * a_core_um
+        spot_sizes_um.append(ws)
+    else:
+        # Jika di luar rentang valid, gunakan NaN agar tidak diplot
+        spot_sizes_um.append(np.nan)
+
+print("Perhitungan selesai.")
+
+# =============================================================================
+# 5. VISUALISASI HASIL
+# =============================================================================
+print("Membuat plot...")
+
+# Membuat figur dan sumbu utama (untuk V-number)
+fig, ax1 = plt.subplots(figsize=(10, 6))
+
+# Membuat sumbu kedua yang berbagi sumbu-x yang sama (untuk ukuran spot)
+ax2 = ax1.twinx()
+
+# --- Plot Garis Batas Singlemode ---
+cutoff_v = 2.405
+ax1.axhline(y=cutoff_v, color='gray', linestyle='--', lw=1.5, label=f'Batas Singlemode (V={cutoff_v})')
+
+# --- Plot V-number ---
+color1 = 'tab:red'
+ax1.plot(wavelengths_um, v_numbers, color=color1, lw=2, label='V-number')
+ax1.set_xlabel('Panjang Gelombang (μm)', fontsize=12)
+ax1.set_ylabel('V-number', color=color1, fontsize=12)
+ax1.tick_params(axis='y', labelcolor=color1)
+
+# --- Plot Ukuran Spot Mode (ws) ---
+color2 = 'tab:blue'
+ax2.plot(wavelengths_um, spot_sizes_um, color=color2, lw=2, linestyle='-', label=r'Radius Spot Mode ($w_S$)')
+ax2.set_ylabel('Radius Spot Mode $w_S$ (μm)', color=color2, fontsize=12)
+ax2.tick_params(axis='y', labelcolor=color2)
+
+# --- Pengaturan Judul dan Legenda ---
+ax1.set_title('V-Number dan Ukuran Spot Mode SMF vs Panjang Gelombang', fontsize=14, weight='bold')
+
+# Menggabungkan legenda dari kedua sumbu
+lines1, labels1 = ax1.get_legend_handles_labels()
+lines2, labels2 = ax2.get_legend_handles_labels()
+ax2.legend(lines1 + lines2, labels1 + labels2, loc='upper center')
+
+ax1.grid(True, which='both', linestyle=':')
+ax1.set_xlim(wavelengths_um.min(), wavelengths_um.max())
+
+fig.tight_layout()
+plt.savefig("gambar_1_4_vnumber_ws.png", dpi=300)
+plt.show()
+
+print("Plot telah disimpan sebagai 'gambar_1_4_vnumber_ws.png'")
+
