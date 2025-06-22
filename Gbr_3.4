@@ -1,0 +1,143 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.special import j0, jn_zeros
+from scipy.integrate import simpson
+
+# Mengatur gaya plot agar terlihat profesional dan jelas
+plt.style.use('seaborn-v0_8-whitegrid')
+plt.rcParams['font.family'] = 'serif'
+plt.rcParams['figure.dpi'] = 150
+
+# =============================================================================
+# 1. FUNGSI-FUNGSI FISIKA SESUAI ARTIKEL WANG ET AL. (2008)
+# =============================================================================
+
+def get_smf_spot_size(lambda_m, a_s, n_co_s, n_cl_s):
+    """Menghitung spot size SMF (w_s) menggunakan Formula Marcuse."""
+    V = (2 * np.pi * a_s / lambda_m) * np.sqrt(n_co_s**2 - n_cl_s**2)
+    V_clipped = np.clip(V, 0.8, 2.5)
+    ws_over_a = 0.65 + 1.619 / (V_clipped**1.5) + 2.879 / (V_clipped**6)
+    return ws_over_a * a_s
+
+def calculate_excitation_coefficient(input_field, mode_profile, r_vec):
+    """Menghitung koefisien eksitasi c_m sesuai Persamaan (2) di paper."""
+    # Integral tumpang tindih (pembilang)
+    numerator_integrand = input_field * mode_profile * r_vec
+    numerator = simpson(numerator_integrand, r_vec)
+    
+    # Integral normalisasi mode (penyebut)
+    denominator_integrand = mode_profile**2 * r_vec
+    denominator = simpson(denominator_integrand, r_vec)
+    
+    # Hindari pembagian dengan nol
+    return numerator / denominator if np.abs(denominator) > 1e-12 else 0.0
+
+# =============================================================================
+# 2. PARAMETER SIMULASI (LANGSUNG DARI ARTIKEL)
+# =============================================================================
+
+# Parameter Umum
+lambda0 = 1.55e-6     # Panjang gelombang (1550 nm)
+num_modes = 25        # Jumlah mode yang disimulasikan
+
+# Parameter SMF (SMF-28 dari paper)
+a_s = 4.15e-6         # Radius inti SMF (meter)
+n_co_s = 1.4504       # Indeks bias inti SMF
+n_cl_s = 1.4447       # Indeks bias cladding SMF
+
+# Parameter MMF (AFS105/125Y dari paper)
+a_m = 52.5e-6         # Radius inti MMF (meter)
+n_co_m = 1.4446       # Indeks bias inti MMF
+
+# Grid Spasial (sesuai Fig. 2 di paper)
+L = 5e-2              # Panjang propagasi 5 cm
+num_r_points = 201    # Resolusi radial
+num_z_points = 401    # Resolusi propagasi
+# Gunakan r positif untuk integral, dan r penuh untuk plot
+r_vec_positive = np.linspace(0, 80e-6, num_r_points // 2 + 1)
+r_vec_full = np.linspace(-80e-6, 80e-6, num_r_points)
+
+# =============================================================================
+# 3. PROSES SIMULASI
+# =============================================================================
+
+# 1. Tentukan medan masukan E(r,0) dari SMF
+w_s = get_smf_spot_size(lambda0, a_s, n_co_s, n_cl_s)
+E_input_positive = np.exp(-r_vec_positive**2 / w_s**2)
+
+# 2. Siapkan profil mode MMF F_m(r) dan hitung koefisiennya
+k0 = 2 * np.pi / lambda0
+U_roots = jn_zeros(0, num_modes) # Akar-akar dari J0(x)
+coeffs = []
+mode_profiles_positive = []
+for m in range(num_modes):
+    U = U_roots[m]
+    profile = np.zeros_like(r_vec_positive)
+    core_mask = r_vec_positive <= a_m
+    profile[core_mask] = j0(U * r_vec_positive[core_mask] / a_m)
+    mode_profiles_positive.append(profile)
+    
+    # Hitung koefisien c_m untuk mode ini
+    cm = calculate_excitation_coefficient(E_input_positive, profile, r_vec_positive)
+    coeffs.append(cm)
+
+# 3. Lakukan superposisi mode
+print("Memulai superposisi mode untuk MMI...")
+E_field_rz = np.zeros((num_r_points, num_z_points), dtype=complex)
+
+for m in range(num_modes):
+    U = U_roots[m]
+    term_in_sqrt = (k0 * n_co_m)**2 - (U / a_m)**2
+    if term_in_sqrt < 0: continue
+    beta = np.sqrt(term_in_sqrt)
+    
+    # Buat profil mode 2D penuh
+    F_m_r_full = np.zeros_like(r_vec_full)
+    core_mask_full = np.abs(r_vec_full) <= a_m
+    F_m_r_full[core_mask_full] = j0(U * r_vec_full[core_mask_full] / a_m)
+    
+    # Fasa propagasi
+    phase_z = np.exp(1j * beta * z_vec)
+    
+    # Jumlahkan kontribusi mode
+    E_field_rz += coeffs[m] * np.outer(F_m_r_full, phase_z)
+    
+print("Simulasi selesai.")
+
+# 4. Hitung intensitas dan normalisasi
+# Ambil magnitudo (amplitudo), bukan intensitas, agar sesuai dengan colorbar di paper
+amplitude = np.abs(E_field_rz)
+amplitude /= np.max(amplitude) # Normalisasi ke 1.0
+
+# =============================================================================
+# 4. VISUALISASI HASIL (MENIRU FIG. 2 DARI ARTIKEL)
+# =============================================================================
+fig, ax = plt.subplots(figsize=(12, 6))
+
+im = ax.pcolormesh(
+    z_vec * 100,      # Konversi z ke cm untuk sumbu x
+    r_vec_full * 1e6, # Konversi r ke um untuk sumbu y
+    amplitude,
+    cmap='jet',       # Colormap 'jet' seperti pada artikel
+    shading='auto',
+    vmin=0, vmax=1.4  # Atur rentang colorbar agar mirip dengan artikel
+)
+
+# Menambahkan colorbar
+cbar = fig.colorbar(im, ax=ax)
+cbar.set_label('Amplitudo Relatif', fontsize=12)
+
+# Mengatur judul dan label sumbu
+ax.set_title("Visualisasi Propagasi Medan $E(r,z)$ dalam MMF Step-Index", 
+             fontsize=16, weight='bold')
+ax.set_xlabel("Jarak Propagasi, z (cm)", fontsize=12)
+ax.set_ylabel("Posisi Radial, r (µm)", fontsize=12)
+
+# Mengatur batas plot agar sesuai
+ax.set_xlim(0, 5)
+ax.set_ylim(-60, 60)
+
+# Menyimpan gambar
+plt.savefig("gambar_visualisasi_field_propagation_SMS_SI.png", dpi=300, bbox_inches='tight')
+
+plt.show()
