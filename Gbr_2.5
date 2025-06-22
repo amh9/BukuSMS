@@ -1,0 +1,125 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.special import genlaguerre
+
+# Mengatur gaya plot agar terlihat profesional dan jelas
+plt.style.use('seaborn-v0_8-whitegrid')
+plt.rcParams['font.family'] = 'serif'
+plt.rcParams['figure.dpi'] = 150
+
+# =============================================================================
+# 1. FUNGSI-FUNGSI FISIKA
+# =============================================================================
+
+def laguerre_gaussian_mode(r, m, wM):
+    """Menghitung profil medan mode Laguerre-Gaussian LP0m."""
+    L_m = genlaguerre(m, 0)
+    x = 2 * r**2 / wM**2
+    norm_factor = np.sqrt(2 / np.pi) / wM
+    return norm_factor * L_m(x) * np.exp(-r**2 / wM**2)
+
+def calculate_Am(m, mu):
+    """Menghitung koefisien eksitasi Am (amplitudo)."""
+    if np.isclose(mu, 1.0):
+        return 1.0 if m == 0 else 0.0
+    term1 = (2 * mu) / (1 + mu**2)
+    term2_base = (1 - mu**2) / (1 + mu**2)
+    return term1 * (term2_base ** m)
+
+def calculate_beta_m(m, k0, n0, a_M, Delta_M):
+    """Menghitung konstanta propagasi beta_m menggunakan aproksimasi dari Pers. 2.10."""
+    term_in_sqrt = 1 - (2 * np.sqrt(2 * Delta_M) / (a_M * k0 * n0)) * (2 * m + 1)
+    if term_in_sqrt < 0:
+        return 0
+    return k0 * n0 * np.sqrt(term_in_sqrt)
+
+# =============================================================================
+# 2. PARAMETER FISIK DAN SIMULASI
+# =============================================================================
+# Parameter Serat Optik (berdasarkan contoh di buku)
+lambda0 = 1.55e-6     # Panjang gelombang operasi (1550 nm)
+n0 = 1.4748           # Indeks bias pusat inti MMF
+n_cl = 1.4630         # Indeks bias cladding
+a_M = 25e-6           # Radius inti MMF
+Delta_M = (n0**2 - n_cl**2) / (2 * n0**2)
+
+# Parameter spot size
+w_s = 4.5e-6          # Radius spot mode SMF masukan
+V_M = (2 * np.pi * a_M / lambda0) * np.sqrt(n0**2 - n_cl**2)
+w_m = a_M * np.sqrt(2 / V_M)
+
+# Parameter Simulasi
+num_modes = 15        # Jumlah mode yang disimulasikan
+L = 60e-3             # Panjang total propagasi (60 mm)
+
+# Grid Spasial
+num_r_points = 201
+num_z_points = 401
+r_vec = np.linspace(-35e-6, 35e-6, num_r_points) # Sumbu radial dari -35 um sampai 35 um
+z_vec = np.linspace(0, L, num_z_points)
+
+# Inisialisasi medan kompleks 2D
+E_field_rz = np.zeros((num_r_points, num_z_points), dtype=complex)
+
+# =============================================================================
+# 3. PROSES SIMULASI PROPAGASI MEDAN
+# =============================================================================
+print("Memulai simulasi propagasi MMI pada GI-MMF...")
+
+k0 = 2 * np.pi / lambda0
+mu = w_s / w_m
+
+# Loop untuk setiap mode untuk membangun medan total
+for m in range(num_modes):
+    Am = calculate_Am(m, mu)
+    beta = calculate_beta_m(m, k0, n0, a_M, Delta_M)
+    
+    if beta == 0: continue
+    
+    psi_m_r = laguerre_gaussian_mode(r_vec, m, w_m)
+    phase_z = np.exp(-1j * beta * z_vec)
+    
+    # Menjumlahkan kontribusi setiap mode
+    E_field_rz += Am * np.outer(psi_m_r, phase_z)
+    print(f"Mode LP_0{m} selesai diproses.")
+
+# Hitung dan normalisasi intensitas medan
+intensity = np.abs(E_field_rz)**2
+intensity /= np.max(intensity)
+print("Simulasi selesai.")
+
+# =============================================================================
+# 4. VISUALISASI HASIL
+# =============================================================================
+fig, ax = plt.subplots(figsize=(12, 6))
+
+# Menggunakan pcolormesh untuk menampilkan peta warna 2D
+im = ax.pcolormesh(z_vec * 1e3, r_vec * 1e6, intensity, 
+                   cmap='viridis', shading='auto', vmin=0, vmax=1)
+
+# Menambahkan colorbar
+cbar = fig.colorbar(im, ax=ax)
+cbar.set_label('Intensitas Normalisasi', fontsize=12)
+
+# Menambahkan judul dan label sumbu
+ax.set_title("Simulasi Interferensi Multimode (MMI) pada GI-MMF", fontsize=16, weight='bold')
+ax.set_xlabel('Jarak Propagasi, z (mm)', fontsize=12)
+ax.set_ylabel('Posisi Radial, r (µm)', fontsize=12)
+
+# Menambahkan garis bantu untuk batas inti (core)
+ax.axhline(a_M * 1e6, color='white', linestyle='--', linewidth=1.2, alpha=0.7)
+ax.axhline(-a_M * 1e6, color='white', linestyle='--', linewidth=1.2, alpha=0.7)
+
+# --- Anotasi untuk penjelasan konseptual ---
+text_props = dict(ha='center', va='center', color='white', fontsize=10, 
+                  weight='bold', bbox=dict(boxstyle='round,pad=0.3', fc=(0,0,0,0.5), ec='none'))
+
+ax.text(L*0.05*1e3, 0, 'Medan\nMasukan\n(z=0)', **text_props)
+ax.text(L*0.25*1e3, 0, 'Penyebaran Medan', **text_props)
+ax.text(L*0.5*1e3, 0, 'Citra Diri\n(Self-Image)', **text_props)
+ax.text(L*0.95*1e3, 0, 'Citra Diri\n(Self-Image)', **text_props)
+
+fig.tight_layout()
+# plt.savefig("gambar_2_4_mmi_gi_mmf.png", dpi=300, bbox_inches='tight')
+
+plt.show()
