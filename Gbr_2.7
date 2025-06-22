@@ -1,0 +1,133 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Mengatur gaya plot agar terlihat profesional dan jelas
+plt.style.use('seaborn-v0_8-whitegrid')
+plt.rcParams['font.family'] = 'serif'
+plt.rcParams['figure.dpi'] = 150
+
+# =============================================================================
+# 1. FUNGSI-FUNGSI FISIKA (SESUAI ARTIKEL KUMAR ET AL. 2003)
+# =============================================================================
+
+def sellemeier_silica(lambda_um):
+    """Menghitung indeks bias silika murni (fused silica)."""
+    lambda_um_sq = lambda_um**2
+    B = [0.6961663, 0.4079426, 0.8974794]
+    C_sq = [0.0684043**2, 0.1162414**2, 9.896161**2]
+    n_sq = 1.0
+    for b_val, c_sq_val in zip(B, C_sq):
+        n_sq += (b_val * lambda_um_sq) / (lambda_um_sq - c_sq_val)
+    return np.sqrt(n_sq)
+
+def calculate_beta_m(m, wl_m, n0, a_m, delta_m):
+    """Menghitung konstanta propagasi beta_m untuk GI-MMF (Pers. 6)."""
+    k0 = 2 * np.pi / wl_m
+    term_in_sqrt = 1 - (2 * np.sqrt(2 * delta_m) / (a_m * k0 * n0)) * (2 * m + 1)
+    return k0 * n0 * np.sqrt(term_in_sqrt) if term_in_sqrt >= 0 else 0
+
+def calculate_transmission_at_wl(L, wl_m, p):
+    """
+    Menghitung transmisi P_SM pada satu titik panjang gelombang.
+    Fungsi ini melakukan seluruh rantai perhitungan untuk satu nilai wl.
+    """
+    # Unpack parameter
+    a_s, delta_s, a_m, delta_m, num_modes = p
+
+    # --- Parameter yang bergantung pada panjang gelombang ---
+    wl_um = wl_m * 1e6
+
+    # 1. Hitung parameter SMF
+    n_cl_s = sellemeier_silica(wl_um)
+    n_co_s = n_cl_s / np.sqrt(1 - 2 * delta_s)
+    NA_s = np.sqrt(n_co_s**2 - n_cl_s**2)
+    V_s = (2 * np.pi * a_s / wl_m) * NA_s
+    
+    # Hitung w_S menggunakan formula Marcuse
+    V_clipped = np.clip(V_s, 0.8, 2.5)
+    ws_over_a = 0.65 + 1.619 / (V_clipped**1.5) + 2.879 / (V_clipped**6)
+    w_s = ws_over_a * a_s
+
+    # 2. Hitung parameter MMF
+    n_cl_m = sellemeier_silica(wl_um) # Cladding adalah silika murni
+    n0_m = n_cl_m / np.sqrt(1 - 2 * delta_m)
+    NA_m = np.sqrt(n0_m**2 - n_cl_m**2)
+    V_m = (2 * np.pi * a_m / wl_m) * NA_m
+    
+    if V_m <= 0: return 0
+    w_m = a_m * np.sqrt(2 / V_m)
+
+    # 3. Hitung rasio mu dan koefisien eksitasi Am^2
+    mu = w_s / w_m
+    
+    # 4. Hitung superposisi koheren (Pers. 11)
+    total_field = 0j
+    for m in range(num_modes):
+        # Hitung A_m^2
+        if np.isclose(mu, 1.0):
+            Am_sq = 1.0 if m == 0 else 0.0
+        else:
+            term1 = (2 * mu) / (1 + mu**2)
+            term2 = (1 - mu**2) / (1 + mu**2)
+            Am_sq = (term1**2) * (term2**(2*m))
+
+        # Hitung beta_m
+        beta = calculate_beta_m(m, wl_m, n0_m, a_m, delta_m)
+        
+        if beta > 0:
+            total_field += Am_sq * np.exp(-1j * beta * L)
+            
+    return np.abs(total_field)**2
+
+# =============================================================================
+# 2. PARAMETER SIMULASI DARI ARTIKEL KUMAR ET AL. (2003)
+# =============================================================================
+fiber_params = [
+    2.2e-6,      # a_s: Radius inti SMF (meter)
+    0.002379,    # delta_s: Perbedaan indeks relatif SMF
+    25.0e-6,     # a_m: Radius inti MMF (meter)
+    0.008,       # delta_m: Perbedaan indeks relatif MMF
+    30           # num_modes: Jumlah mode yang disimulasikan
+]
+
+# Panjang MMF yang akan disimulasikan
+L1 = 2.0  # 2 meter
+L2 = 4.0  # 4 meter
+
+# Rentang panjang gelombang
+wavelengths_m = np.linspace(0.6e-6, 1.7e-6, 401)
+
+# =============================================================================
+# 3. PERHITUNGAN SPEKTRUM TRANSMISI
+# =============================================================================
+print(f"Menghitung spektrum transmisi untuk L = {L1} m...")
+T1 = [calculate_transmission_at_wl(L1, wl, fiber_params) for wl in wavelengths_m]
+print(f"Menghitung spektrum transmisi untuk L = {L2} m...")
+T2 = [calculate_transmission_at_wl(L2, wl, fiber_params) for wl in wavelengths_m]
+print("Perhitungan selesai.")
+
+# =============================================================================
+# 4. VISUALISASI HASIL
+# =============================================================================
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 10), sharex=True)
+fig.suptitle('Variasi Daya Keluaran $(P_{SM})$ vs. Panjang Gelombang', fontsize=16, weight='bold')
+
+# --- Plot (a): L = 2 m ---
+ax1.plot(wavelengths_m * 1e6, T1, color='crimson', lw=1.5)
+ax1.set_title(f'(a) Daya Keluaran ($P_{{SM}}$) untuk L = {L1} m')
+ax1.set_ylabel('Daya Keluaran ($P_{SM}$)')
+ax1.set_ylim(-0.05, 1.05)
+ax1.grid(True, linestyle=':')
+
+# --- Plot (b): L = 4 m ---
+ax2.plot(wavelengths_m * 1e6, T2, color='mediumblue', lw=1.5)
+ax2.set_title(f'(b) Daya Keluaran ($P_{{SM}}$) untuk L = {L2} m')
+ax2.set_xlabel('Panjang Gelombang (μm)')
+ax2.set_ylabel('Daya Keluaran ($P_{SM}$)')
+ax2.set_ylim(-0.05, 1.05)
+ax2.grid(True, linestyle=':')
+
+plt.xlim(wavelengths_m.min()*1e6, wavelengths_m.max()*1e6)
+plt.tight_layout(rect=[0, 0, 1, 0.96])
+plt.savefig("gambar_2_5_reproduksi_paper_final.png", dpi=300)
+plt.show()
