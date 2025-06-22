@@ -1,0 +1,91 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Mengatur gaya plot agar terlihat profesional dan jelas
+plt.style.use('seaborn-v0_8-whitegrid')
+plt.rcParams['font.family'] = 'serif'
+plt.rcParams['figure.dpi'] = 150
+
+# =============================================================================
+# 1. FUNGSI UNTUK MODEL GAUSSIAN 2D
+# =============================================================================
+
+def gaussian_intensity_2d(X, Y, w_s):
+    """
+    Menghitung profil intensitas Gaussian 2D.
+    Intensitas sebanding dengan kuadrat dari medan listrik E.
+    E ~ exp(-r^2 / w_s^2), maka I ~ exp(-2*r^2 / w_s^2)
+    
+    Args:
+        X (array): Grid koordinat x 2D.
+        Y (array): Grid koordinat y 2D.
+        w_s (float): Radius spot mode.
+        
+    Returns:
+        array: Matriks intensitas 2D yang ternormalisasi.
+    """
+    r_sq = X**2 + Y**2
+    # Faktor 2 pada eksponen karena Intensitas sebanding dengan E^2
+    intensity = np.exp(-2 * r_sq / (w_s**2))
+    return intensity
+
+# =============================================================================
+# 2. PARAMETER SIMULASI
+# =============================================================================
+
+# Radius spot mode (w_s) dalam mikrometer, sesuai judul gambar
+w_s_um = 4.5
+
+# Tentukan ukuran grid plot agar profil terlihat dengan baik
+# Biasanya 2.5 hingga 3 kali dari w_s sudah cukup
+grid_size = 2.5 * w_s_um
+num_points = 400 # Jumlah titik untuk resolusi yang halus
+
+# =============================================================================
+# 3. MEMBUAT GRID DAN MENGHITUNG INTENSITAS
+# =============================================================================
+
+# Membuat vektor koordinat 1D
+x_vals = np.linspace(-grid_size, grid_size, num_points)
+y_vals = np.linspace(-grid_size, grid_size, num_points)
+
+# Membuat grid koordinat 2D dari vektor 1D
+X, Y = np.meshgrid(x_vals, y_vals)
+
+# Menghitung matriks intensitas 2D
+intensity_field = gaussian_intensity_2d(X, Y, w_s_um)
+
+# =============================================================================
+# 4. VISUALISASI PLOT
+# =============================================================================
+
+fig, ax = plt.subplots(figsize=(8, 6.5))
+
+# Menggunakan imshow untuk menampilkan data 2D sebagai gambar (heatmap)
+# 'extent' digunakan untuk mengatur skala sumbu x dan y dengan benar
+# 'origin'='lower' menempatkan titik (0,0) di pojok kiri bawah
+# 'cmap'='inferno' adalah skema warna yang mirip dengan contoh di buku
+im = ax.imshow(intensity_field, 
+               extent=[-grid_size, grid_size, -grid_size, grid_size], 
+               cmap='inferno', 
+               origin='lower')
+
+# Mengatur agar aspek rasio plot lingkaran (tidak elips)
+ax.set_aspect('equal')
+
+# Menambahkan colorbar
+cbar = fig.colorbar(im)
+cbar.set_label('Intensitas Medan Relatif (Normalisasi)', fontsize=12)
+
+# Mengatur judul dan label sumbu
+# Menggunakan format LaTeX untuk simbol matematika
+ax.set_title(f"Profil Intensitas Medan Gaussian 2D ($w_S = {w_s_um:.1f}~\\mu$m)", 
+             fontsize=16, weight='bold')
+ax.set_xlabel("x (µm)", fontsize=12)
+ax.set_ylabel("y (µm)", fontsize=12)
+
+# Menyesuaikan layout dan menyimpan gambar
+fig.tight_layout()
+# plt.savefig("gambar_1_5_gaussian_profile.png", dpi=300, bbox_inches='tight')
+
+plt.show()
