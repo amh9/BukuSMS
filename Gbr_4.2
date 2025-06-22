@@ -1,0 +1,101 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+# =============================================================================
+# PARAMETER SIMULASI UMUM
+# =============================================================================
+core_radius = 50.0   # Radius inti dalam mikrometer
+fiber_length = 1000  # Panjang propagasi dalam mikrometer
+num_steps = 1000     # Jumlah langkah simulasi
+dz = fiber_length / num_steps # Ukuran setiap langkah
+
+# =============================================================================
+# FUNGSI UNTUK SIMULASI JALUR SINAR
+# =============================================================================
+
+def simulate_si_ray(initial_angle_deg):
+    """Mensimulasikan satu jejak sinar zig-zag pada SI-MMF."""
+    y = 0.0
+    angle_rad = np.deg2rad(initial_angle_deg)
+    y_path = [y]
+    z_path = [0]
+    
+    for _ in range(num_steps):
+        # Hitung posisi y pada langkah berikutnya
+        y_next = y + dz * np.tan(angle_rad)
+        
+        # Cek jika sinar memantul pada batas inti
+        if y_next >= core_radius or y_next <= -core_radius:
+            angle_rad = -angle_rad # Balikkan sudut
+            y = y + dz * np.tan(angle_rad)
+        else:
+            y = y_next
+            
+        z_path.append(z_path[-1] + dz)
+        y_path.append(y)
+    return z_path, y_path
+
+def simulate_gi_ray(initial_slope):
+    """Mensimulasikan satu jejak sinar sinusoidal pada GI-MMF."""
+    y = 0.0
+    slope = initial_slope
+    y_path = [y]
+    z_path = [0]
+    # Faktor k menentukan seberapa cepat sinar melengkung
+    k = (initial_slope / core_radius)**2 * 50 
+    
+    for _ in range(num_steps):
+        # Akselerasi sebanding dengan -y (gaya pemulih)
+        acceleration = -k * y
+        slope += acceleration * dz
+        y += slope * dz
+        
+        z_path.append(z_path[-1] + dz)
+        y_path.append(y)
+    return z_path, y_path
+
+# =============================================================================
+# MENGHASILKAN DATA JALUR SINAR
+# =============================================================================
+# Untuk SI-MMF
+si_low_order_z, si_low_order_y = simulate_si_ray(initial_angle_deg=15)
+si_high_order_z, si_high_order_y = simulate_si_ray(initial_angle_deg=30)
+
+# Untuk GI-MMF
+gi_low_order_z, gi_low_order_y = simulate_gi_ray(initial_slope=0.2)
+gi_high_order_z, gi_high_order_y = simulate_gi_ray(initial_slope=0.4)
+
+# =============================================================================
+# MEMBUAT PLOT GAMBAR 4.2
+# =============================================================================
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+fig.suptitle('Perbandingan Konseptual Jalur Propagasi Sinar', fontsize=16)
+
+# --- Subplot (a) untuk SI-MMF ---
+ax1.plot(si_low_order_z, si_low_order_y, 'b-', label='Mode Orde Rendah')
+ax1.plot(si_high_order_z, si_high_order_y, 'r--', label='Mode Orde Tinggi')
+ax1.axhline(y=core_radius, color='k', linestyle=':')
+ax1.axhline(y=-core_radius, color='k', linestyle=':')
+ax1.set_title('(a) Serat Optik Step-Index Multimode (SI-MMF)')
+ax1.set_ylabel(r'Posisi Transversal y ($\mu$m)')
+ax1.set_ylim(-core_radius * 1.2, core_radius * 1.2)
+ax1.legend()
+ax1.grid(True, linestyle=':', alpha=0.6)
+
+# --- Subplot (b) untuk GI-MMF ---
+ax2.plot(gi_low_order_z, gi_low_order_y, 'b-', label='Mode Orde Rendah')
+ax2.plot(gi_high_order_z, gi_high_order_y, 'r--', label='Mode Orde Tinggi')
+ax2.axhline(y=core_radius, color='k', linestyle=':')
+ax2.axhline(y=-core_radius, color='k', linestyle=':')
+ax2.set_title('(b) Serat Optik Graded-Index Multimode (GI-MMF)')
+ax2.set_xlabel(r'Jarak Propagasi z ($\mu$m)')
+ax2.set_ylabel(r'Posisi Transversal y ($\mu$m)')
+ax2.set_ylim(-core_radius * 1.2, core_radius * 1.2)
+ax2.legend()
+ax2.grid(True, linestyle=':', alpha=0.6)
+
+plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+plt.savefig('Gambar_4_2_Jalur_Propagasi_Komparatif.png')
+plt.show()
+
+print("Plot telah disimpan sebagai 'Gambar_4_2_Jalur_Propagasi_Komparatif.png'")
