@@ -1,0 +1,175 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.special import jv, kn, jn_zeros
+from scipy.optimize import root_scalar
+from scipy.integrate import simpson
+import time
+
+# Mengatur gaya plot agar terlihat profesional dan jelas
+plt.style.use('seaborn-v0_8-whitegrid')
+plt.rcParams['font.family'] = 'serif'
+plt.rcParams['figure.dpi'] = 150
+
+# =============================================================================
+# 1. FUNGSI-FUNGSI FISIKA
+# =============================================================================
+
+def characteristic_equation_lp0m(U, V_num):
+    """Persamaan karakteristik transendental untuk mode LP0m."""
+    # Menghindari error pada batas-batas U
+    if U <= 1e-9 or U >= V_num:
+        return np.inf
+    W = np.sqrt(V_num**2 - U**2)
+    return U * jv(1, U) * kn(0, W) - W * jv(0, U) * kn(1, W)
+
+def get_si_modes(n_co, n_cl, a, lambda_val, num_modes):
+    """
+    Menghitung konstanta propagasi (beta) dan profil medan (F_m) untuk MMF SI
+    pada satu panjang gelombang (lambda_val).
+    """
+    k0 = 2 * np.pi / lambda_val
+    V = k0 * a * np.sqrt(n_co**2 - n_cl**2)
+
+    betas, mode_profiles = [], []
+    r_vec = np.linspace(0, a * 2, 500) # Vektor radial untuk integrasi
+
+    j1_zeros = jn_zeros(1, num_modes)
+
+    for m in range(1, num_modes + 1):
+        # Menentukan rentang pencarian akar untuk setiap mode
+        bracket = [j1_zeros[m-2] + 1e-6, j1_zeros[m-1] - 1e-6] if m > 1 else [1e-6, jn_zeros(0, 1)[0] - 1e-6]
+
+        if bracket[1] >= V: continue # Mode ini cutoff
+
+        try:
+            sol = root_scalar(characteristic_equation_lp0m, args=(V,), bracket=bracket)
+            if sol.converged:
+                U = sol.root
+                beta = np.sqrt((k0 * n_co)**2 - (U / a)**2)
+                betas.append(beta)
+
+                # Menghitung profil medan (diperlukan untuk koefisien eksitasi)
+                W = np.sqrt(V**2 - U**2)
+                core_mask = r_vec <= a
+                field_profile = np.zeros_like(r_vec)
+                field_profile[core_mask] = jv(0, U * r_vec[core_mask] / a)
+                field_profile[~core_mask] = (jv(0, U) / kn(0, W)) * kn(0, W * r_vec[~core_mask] / a)
+
+                # Normalisasi profil medan
+                norm_const = np.sqrt(2 * np.pi * simpson(field_profile**2 * r_vec, r_vec))
+                if norm_const > 1e-9:
+                    mode_profiles.append(field_profile / norm_const)
+                else:
+                    betas.pop() # Hapus beta jika normalisasi gagal
+        except ValueError:
+            continue
+            
+    return np.array(betas), np.array(mode_profiles), r_vec
+
+def calculate_si_spectrum(length, wavelengths_m, mmf_params, smf_params, num_modes):
+    """Menghitung seluruh spektrum loss untuk satu panjang MMF."""
+    coupling_loss_db = []
+    
+    print(f"\nMemulai perhitungan untuk L = {length*1000:.2f} mm...")
+    start_time = time.time()
+    
+    for i, wl in enumerate(wavelengths_m):
+        # --- Perhitungan di setiap titik panjang gelombang ---
+        # 1. Hitung mode MMF pada panjang gelombang ini
+        betas, mmf_profiles, r_vec = get_si_modes(
+            mmf_params['n_co'], mmf_params['n_cl'], mmf_params['a'], wl, num_modes
+        )
+        
+        if len(betas) == 0: # Jika tidak ada mode yang terpandu
+            coupling_loss_db.append(0) # Loss maksimum (transmisi nol)
+            continue
+            
+        # 2. Buat profil SMF (diasumsikan w_s konstan untuk rentang pendek)
+        w_s = smf_params['w_s']
+        smf_field_profile = (1/(np.sqrt(np.pi)*w_s)) * np.exp(-0.5 * (r_vec/w_s)**2)
+
+        # 3. Hitung koefisien eksitasi
+        coeffs = []
+        for mmf_profile in mmf_profiles:
+            integrand = smf_field_profile * mmf_profile * r_vec
+            c_m = 2 * np.pi * simpson(integrand, r_vec)
+            coeffs.append(c_m)
+        coeffs = np.array(coeffs)
+        
+        # 4. Hitung coupling loss pada panjang MMF ini
+        transmitted_power = np.abs(np.sum(coeffs**2 * np.exp(1j * betas * length)))**2
+        loss = 10 * np.log10(transmitted_power) if transmitted_power > 1e-9 else 90.0
+        coupling_loss_db.append(loss)
+        
+        # Memberi feedback progres
+        if (i + 1) % 10 == 0:
+            print(f"  ...{i+1}/{len(wavelengths_m)} titik selesai.")
+
+    end_time = time.time()
+    print(f"Perhitungan untuk L = {length*1000:.2f} mm selesai dalam {end_time - start_time:.2f} detik.")
+    
+    return coupling_loss_db
+
+# =============================================================================
+# 2. PARAMETER SIMULASI UNTUK GAMBAR 4.6
+# =============================================================================
+# Parameter dari paper Wang et al. (2008), sering digunakan untuk SMS SI
+mmf_params = {
+    'n_co': 1.4446,
+    'n_cl': 1.4271,
+    'a': 52.5e-6,
+}
+smf_params = {
+    'w_s': 4.1e-6 
+}
+num_modes_to_calculate = 15 # Jumlah mode LP0m
+
+# Panjang MMF target dan variasinya. Variasi sangat kecil karena sensitivitas tinggi.
+L0 = 0.05      # 4.28 cm, panjang re-imaging aproksimasi
+delta_L = 50e-6  # Variasi 50 mikrometer (0.05 mm)
+lengths_to_test = [L0 - delta_L, L0, L0 + delta_L]
+
+# Rentang panjang gelombang dan resolusi. Resolusi lebih rendah untuk mempersingkat waktu.
+wavelengths_m = np.linspace(1.5e-6, 1.6e-6, 101) # 101 titik
+
+# =============================================================================
+# 3. PERHITUNGAN SPEKTRUM (Akan memakan waktu)
+# =============================================================================
+results_loss = {}
+for length in lengths_to_test:
+    loss_spectrum = calculate_si_spectrum(length, wavelengths_m, mmf_params, smf_params, num_modes_to_calculate)
+    results_loss[length] = loss_spectrum
+
+# =============================================================================
+# 4. VISUALISASI HASIL UNTUK GAMBAR 4.6
+# =============================================================================
+print("\nMembuat plot...")
+fig, ax = plt.subplots(1, 1, figsize=(10, 6))
+
+colors = ['royalblue', 'black', 'firebrick']
+styles = ['--', '-', '--']
+labels = [
+    f'L = {lengths_to_test[0]*1000:.2f} mm (-0.05 mm)',
+    f'L = {lengths_to_test[1]*1000:.2f} mm (Target)',
+    f'L = {lengths_to_test[2]*1000:.2f} mm (+0.05 mm)'
+]
+
+for i, length in enumerate(lengths_to_test):
+    ax.plot(wavelengths_m * 1e9, results_loss[length],
+            color=colors[i],
+            linestyle=styles[i],
+            lw=1.5,
+            label=labels[i])
+
+ax.set_title('Simulasi Toleransi Fabrikasi untuk SMS SI-MMF', fontsize=14, weight='bold')
+ax.set_xlabel('Panjang Gelombang (nm)', fontsize=12)
+ax.set_ylabel('Coupling Loss (dB)', fontsize=12)
+ax.grid(True, linestyle=':', which='both')
+ax.legend(title='Panjang MMF', fontsize=10)
+ax.set_xlim(1500, 1600)
+ax.set_ylim(-40, 0) # Rentang y lebih besar karena loss bisa sangat tinggi
+
+plt.tight_layout()
+plt.savefig("gambar_4_6_toleransi_fabrikasi_si.png", dpi=300)
+plt.show()
+print("Plot telah disimpan sebagai 'gambar_4_6_toleransi_fabrikasi_si.png'")
