@@ -1,0 +1,139 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.special import jv, kn, jn_zeros
+from scipy.optimize import root_scalar
+from scipy.integrate import simpson # Corrected import
+
+# =============================================================================
+# FUNGSI-FUNGSI PEMBANTU (Sama seperti sebelumnya)
+# =============================================================================
+
+def characteristic_equation_lp0m(U, V_num):
+    """Persamaan karakteristik transendental untuk mode LP0m."""
+    if U <= 1e-9 or U >= V_num:
+        return np.inf
+    W = np.sqrt(V_num**2 - U**2)
+    return U * jv(1, U) * kn(0, W) - W * jv(0, U) * kn(1, W)
+
+def get_si_modes(params, num_modes):
+    """
+    Menghitung konstanta propagasi (beta) dan profil medan (F_m) yang ternormalisasi
+    untuk mode LP0m pada MMF Step-Index secara numerik.
+    """
+    n_co, n_cl, a, lambda_0 = params['n_co'], params['n_cl'], params['a'], params['lambda_0']
+    k0 = 2 * np.pi / lambda_0
+    V = k0 * a * np.sqrt(n_co**2 - n_cl**2)
+
+    betas, mode_profiles = [], []
+    r_vec = np.linspace(0, a * 3, 1000)
+
+    j1_zeros = jn_zeros(1, num_modes)
+
+    for m in range(1, num_modes + 1):
+        if m == 1:
+            bracket = [1e-6, jn_zeros(0, 1)[0] - 1e-6]
+        else:
+            bracket = [j1_zeros[m-2] + 1e-6, j1_zeros[m-1] - 1e-6]
+
+        if bracket[1] >= V: continue
+
+        try:
+            sol = root_scalar(characteristic_equation_lp0m, args=(V,), bracket=bracket)
+            if sol.converged:
+                U = sol.root
+                beta = np.sqrt((k0 * n_co)**2 - (U / a)**2)
+
+                core_mask = r_vec <= a
+                field_profile = np.zeros_like(r_vec)
+                field_profile[core_mask] = jv(0, U * r_vec[core_mask] / a)
+                W = np.sqrt(V**2 - U**2)
+                scale_factor = jv(0, U) / kn(0, W)
+                field_profile[r_vec > a] = scale_factor * kn(0, W * r_vec[r_vec > a] / a)
+
+                integrand = (field_profile**2) * r_vec
+                norm_const = np.sqrt(2 * np.pi * simpson(integrand, r_vec)) # Corrected usage
+
+                if norm_const > 1e-9:
+                    betas.append(beta)
+                    mode_profiles.append(field_profile / norm_const)
+        except ValueError:
+            continue
+
+    return np.array(betas), np.array(mode_profiles), r_vec
+
+
+def get_excitation_coeffs(smf_profile, mmf_profiles, r_vec):
+    """Menghitung koefisien eksitasi c_m."""
+    c_m_list = []
+    for mmf_profile in mmf_profiles:
+        integrand = smf_profile * mmf_profile * r_vec
+        c_m = 2 * np.pi * simpson(integrand, r_vec) # Corrected usage
+        c_m_list.append(c_m)
+    return np.array(c_m_list)
+
+def calculate_coupling_loss(coeffs, betas, z_length):
+    """Menghitung coupling loss (dB) pada panjang z."""
+    # Menghitung daya transmisi P(z) = |sum(c_m^2 * exp(i*beta_m*z))|^2
+    transmitted_power = np.abs(np.sum(coeffs**2 * np.exp(1j * betas * z_length)))**2
+
+    # Menghindari log(0)
+    if transmitted_power < 1e-9:
+        transmitted_power = 1e-9
+
+    return 10 * np.log10(transmitted_power)
+
+# =============================================================================
+# PARAMETER SIMULASI
+# =============================================================================
+mmf_params = {
+    'n_co': 1.4446,
+    'n_cl': 1.4271,
+    'a': 52.5e-6,
+    'lambda_0': 1.55e-6
+}
+smf_params = {
+    'w_s': 4.1e-6
+}
+num_modes_to_calculate = 20
+
+# Rentang panjang MMF untuk diplot
+z_max_cm = 5.0
+z_points = 1000 # Jumlah titik yang lebih banyak untuk resolusi tinggi
+z_vec_m = np.linspace(0, z_max_cm * 1e-2, z_points)
+
+# =============================================================================
+# PERHITUNGAN
+# =============================================================================
+print("1. Menghitung mode-mode MMF (hanya sekali)...")
+betas, mmf_profiles, r_vec = get_si_modes(mmf_params, num_modes_to_calculate)
+print(f"   {len(betas)} mode berhasil dihitung.")
+
+print("2. Menghitung koefisien eksitasi (hanya sekali)...")
+smf_field_profile = (1 / (np.sqrt(np.pi) * smf_params['w_s'])) * np.exp(-0.5 * (r_vec / smf_params['w_s'])**2)
+coeffs = get_excitation_coeffs(smf_field_profile, mmf_profiles, r_vec)
+
+print("3. Menghitung coupling loss sebagai fungsi panjang MMF...")
+coupling_loss_db = [calculate_coupling_loss(coeffs, betas, z) for z in z_vec_m]
+print("   Perhitungan selesai.")
+
+# =============================================================================
+# MEMBUAT PLOT GAMBAR 3.4
+# =============================================================================
+print("4. Membuat plot...")
+fig, ax = plt.subplots(figsize=(10, 6))
+
+ax.plot(z_vec_m * 100, coupling_loss_db, color='blue', linewidth=1)
+
+# Menyesuaikan gaya agar mirip dengan gambar referensi di paper
+ax.set_title('Coupling Loss vs. Panjang MMF', fontsize=14)
+ax.set_xlabel('Panjang segmen MMF (cm)', fontsize=12)
+ax.set_ylabel('Coupling Loss (dB)', fontsize=12)
+ax.grid(True, linestyle=':', alpha=0.7)
+ax.set_ylim(-40, 0)
+ax.set_xlim(0, z_max_cm)
+
+plt.tight_layout()
+plt.savefig('Coupling_Loss_vs_Panjang.png')
+plt.show()
+
+print("Plot telah disimpan sebagai 'Gambar_3_5_Coupling_Loss_vs_Panjang.png'")
