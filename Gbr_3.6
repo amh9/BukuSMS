@@ -1,0 +1,161 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.special import genlaguerre, j0, j1, jn_zeros
+from scipy.optimize import root_scalar
+from scipy.integrate import simpson
+
+# Mengatur gaya plot agar terlihat profesional dan jelas
+plt.style.use('seaborn-v0_8-whitegrid')
+plt.rcParams['font.family'] = 'serif'
+plt.rcParams['figure.dpi'] = 150
+
+# =============================================================================
+# FUNGSI-FUNGSI SIMULASI (DIAMBIL DARI KODE ANDA)
+# =============================================================================
+
+# Add the missing get_smf_spot_size function
+def get_smf_spot_size(lambda_m, a_s, n_co_s, n_cl_s):
+    """Menghitung spot size SMF menggunakan formula Marcuse."""
+    v_s = (2 * np.pi * a_s / lambda_m) * np.sqrt(n_co_s**2 - n_cl_s**2)
+    v_clipped = np.clip(v_s, 0.8, 2.5)
+    ws_over_a = 0.65 + 1.619 / (v_clipped**1.5) + 2.879 / (v_clipped**6)
+    return ws_over_a * a_s
+
+def simulate_gi_mmi(params):
+    """Mensimulasikan MMI pada serat Graded-Index."""
+    lambda0, n0, a_M, w_s, num_modes, L, num_r, num_z = params
+    Delta_M = (n0**2 - 1.4630**2) / (2 * n0**2) # Asumsi n_cladding = 1.4630
+
+    r_vec = np.linspace(-a_M * 1.5, a_M * 1.5, num_r)
+    z_vec = np.linspace(0, L, num_z)
+    E_field_rz = np.zeros((num_r, num_z), dtype=complex)
+
+    k0 = 2 * np.pi / lambda0
+    V_M = k0 * a_M * np.sqrt(n0**2 - 1.4630**2)
+    w_m = a_M * np.sqrt(2 / V_M) if V_M > 0 else np.inf
+    mu = w_s / w_m if w_m > 0 else 0
+
+    for m in range(num_modes):
+        Am = (2*mu/(1+mu**2)) * ((1-mu**2)/(1+mu**2))**m
+        term_beta = 1 - (2*np.sqrt(2*Delta_M)/(a_M*k0*n0))*(2*m+1)
+        if term_beta < 0: continue
+        beta = k0 * n0 * np.sqrt(term_beta)
+
+        L_m_poly = genlaguerre(m, 0)
+        x_poly = 2 * r_vec**2 / w_m**2
+        psi_m_r = np.sqrt(2/np.pi)/w_m * L_m_poly(x_poly) * np.exp(-r_vec**2/w_m**2)
+
+        phase_z = np.exp(-1j * beta * z_vec)
+        E_field_rz += Am * np.outer(psi_m_r, phase_z)
+
+    intensity = np.abs(E_field_rz)**2
+    return z_vec, r_vec, intensity / np.max(intensity)
+
+def simulate_si_mmi(params):
+    """Mensimulasikan MMI pada serat Step-Index menggunakan metode numerik eksak."""
+    lambda0, n_co_s, n_cl_s, a_s, n_co_m, n_cl_m, a_m, num_modes, L, num_r, num_z = params
+
+    r_vec_full = np.linspace(-a_m * 1.5, a_m * 1.5, num_r)
+    z_vec = np.linspace(0, L, num_z)
+    E_field_rz = np.zeros((num_r, num_z), dtype=complex)
+
+    k0 = 2 * np.pi / lambda0
+    V_smf = (2 * np.pi * a_s / lambda0) * np.sqrt(n_co_s**2 - n_cl_s**2)
+    V_clipped = np.clip(V_smf, 0.8, 2.5)
+    w_s = a_s * (0.65 + 1.619 / (V_clipped**1.5) + 2.879 / (V_clipped**6))
+
+    r_integrate = np.linspace(0, a_m, 2001)
+    E_input = np.exp(-r_integrate**2 / w_s**2)
+
+    U_roots = jn_zeros(0, num_modes)
+    coeffs, betas = [], []
+    for m in range(num_modes):
+        U = U_roots[m]
+        F_m = j0(U * r_integrate / a_m)
+        numerator = simpson(E_input * F_m * r_integrate, x=r_integrate)
+        denominator = simpson(F_m**2 * r_integrate, x=r_integrate)
+        coeffs.append(numerator / denominator if abs(denominator) > 1e-20 else 0.0)
+
+        term_beta = (k0 * n_co_m)**2 - (U / a_m)**2
+        betas.append(np.sqrt(term_beta) if term_beta >= 0 else 0)
+
+    coeffs = np.array(coeffs)
+    betas = np.array(betas)
+
+    for m in range(num_modes):
+        if betas[m] == 0: continue
+        F_m_full = np.zeros_like(r_vec_full)
+        core_mask = np.abs(r_vec_full) <= a_m
+        F_m_full[core_mask] = j0(U_roots[m] * r_vec_full[core_mask] / a_m)
+        phase_z = np.exp(1j * betas[m] * z_vec)
+        E_field_rz += coeffs[m] * np.outer(F_m_full, phase_z)
+
+    intensity = np.abs(E_field_rz)**2
+    return z_vec, r_vec_full, intensity / np.max(intensity)
+
+# =============================================================================
+# 2. PARAMETER UTAMA DAN EKSEKUSI
+# =============================================================================
+
+# --- Parameter Umum untuk Perbandingan yang Adil ---
+common_params = {
+    "lambda0": 1.55e-6,
+    "num_modes": 15,    # Jumlah mode yang disimulasikan
+    "L": 80e-3,         # Panjang propagasi 80 mm
+    "num_r_points": 201,
+    "num_z_points": 401
+}
+smf_params = {'a_s': 4.15e-6, 'n_co_s': 1.4504, 'n_cl_s': 1.4447}
+w_s_input = get_smf_spot_size(common_params["lambda0"], **smf_params)
+
+# --- Parameter spesifik untuk GI-MMF (dengan a = 25 um) ---
+params_gi = (
+    common_params["lambda0"], 1.4748, 25e-6, w_s_input,
+    common_params["num_modes"], common_params["L"],
+    common_params["num_r_points"], common_params["num_z_points"]
+)
+
+# --- Parameter spesifik untuk SI-MMF (dengan a = 25 um) ---
+params_si = (
+    common_params["lambda0"], smf_params['n_co_s'], smf_params['n_cl_s'], smf_params['a_s'],
+    1.48, 1.46, 25e-6, # n_co_m, n_cl_m, a_m
+    common_params["num_modes"], common_params["L"],
+    common_params["num_r_points"], common_params["num_z_points"]
+)
+
+# Jalankan kedua simulasi
+print("Menjalankan simulasi untuk GI-MMF...")
+z_gi, r_gi, intensity_gi = simulate_gi_mmi(params_gi)
+print("Menjalankan simulasi untuk SI-MMF...")
+z_si, r_si, intensity_si = simulate_si_mmi(params_si)
+print("Simulasi selesai.")
+
+# =============================================================================
+# 3. VISUALISASI PERBANDINGAN
+# =============================================================================
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
+fig.suptitle("Perbandingan Konseptual Pola Interferensi Multimode (MMI)", fontsize=18, weight='bold')
+
+# Panel (a): MMI pada GI-MMF
+im1 = ax1.pcolormesh(z_gi*1e3, r_gi*1e6, intensity_gi, cmap='inferno', shading='auto', vmin=0, vmax=1)
+ax1.set_title("(a) MMI pada GI-MMF (Pola Periodik & Teratur)", fontsize=14)
+ax1.set_xlabel("Jarak Propagasi, z (mm)", fontsize=12)
+ax1.set_ylabel("Posisi Radial, r (µm)", fontsize=12)
+ax1.axhline(params_gi[2]*1e6, color='white', linestyle='--', linewidth=1, alpha=0.5)
+ax1.axhline(-params_gi[2]*1e6, color='white', linestyle='--', linewidth=1, alpha=0.5)
+
+# Panel (b): MMI pada SI-MMF
+im2 = ax2.pcolormesh(z_si*1e3, r_si*1e6, intensity_si, cmap='inferno', shading='auto', vmin=0, vmax=1)
+ax2.set_title("(b) MMI pada SI-MMF (Pola Kompleks)", fontsize=14)
+ax2.set_xlabel("Jarak Propagasi, z (mm)", fontsize=12)
+ax2.axhline(params_si[6]*1e6, color='white', linestyle='--', linewidth=1, alpha=0.5)
+ax2.axhline(-params_si[6]*1e6, color='white', linestyle='--', linewidth=1, alpha=0.5)
+
+# Menambahkan satu colorbar bersama untuk kedua plot
+fig.subplots_adjust(right=0.85, wspace=0.1)
+cbar_ax = fig.add_axes([0.87, 0.15, 0.02, 0.7])
+cbar = fig.colorbar(im1, cax=cbar_ax)
+cbar.set_label('Intensitas Normalisasi', fontsize=12)
+
+plt.savefig("gambar_3_6_mmi_comparison_final.png", dpi=300, bbox_inches='tight')
+plt.show()
