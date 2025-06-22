@@ -1,0 +1,121 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Mengatur gaya plot agar terlihat profesional dan jelas
+plt.style.use('seaborn-v0_8-whitegrid')
+plt.rcParams['font.family'] = 'serif'
+plt.rcParams['figure.dpi'] = 150
+
+# =============================================================================
+# 1. FUNGSI-FUNGSI FISIKA BERDASARKAN TEORI DI BAB 1 & 2
+# =============================================================================
+
+def sellemeier_silica(lambda_um):
+    """Menghitung indeks bias silika murni (fused silica) menggunakan formula Sellemeier."""
+    lambda_um_sq = lambda_um**2
+    B = [0.6961663, 0.4079426, 0.8974794]
+    C_sq = [0.0684043**2, 0.1162414**2, 9.896161**2]
+    n_sq = 1.0
+    for b_val, c_sq_val in zip(B, C_sq):
+        n_sq += (b_val * lambda_um_sq) / (lambda_um_sq - c_sq_val)
+    return np.sqrt(n_sq)
+
+def calculate_spot_size_smf(lambda_um, a_s, delta_s):
+    """Menghitung ukuran spot mode SMF (w_S) menggunakan formula Marcuse."""
+    n_cladding = sellemeier_silica(lambda_um)
+    n_core = n_cladding / np.sqrt(1 - 2 * delta_s)
+    NA = np.sqrt(n_core**2 - n_cladding**2)
+    V = (2 * np.pi * a_s / lambda_um) * NA
+    
+    # Formula Marcuse (Persamaan 1.8)
+    V_clipped = np.clip(V, 0.8, 10) # Perluas rentang atas untuk kalkulasi
+    ws_over_a = 0.65 + 1.619 / (V_clipped**1.5) + 2.879 / (V_clipped**6)
+    return ws_over_a * a_s
+
+def calculate_spot_size_gimmf(lambda_um, a_m, delta_m):
+    """Menghitung ukuran spot mode MMF-GI (w_M)."""
+    n_cladding = sellemeier_silica(lambda_um)
+    n_core = n_cladding / np.sqrt(1 - 2 * delta_m)
+    NA = np.sqrt(n_core**2 - n_cladding**2)
+    V = (2 * np.pi * a_m / lambda_um) * NA
+    if V <= 0: return np.inf
+    # Formula Ukuran Spot MMF GI (Persamaan 2.6)
+    return a_m * np.sqrt(2 / V)
+
+def calculate_Am_power(mu, m):
+    """Menghitung daya modal fraksional |Am|^2 untuk mode m."""
+    if np.isclose(mu, 1.0):
+        return 1.0 if m == 0 else 0.0
+    if mu <= 0 or mu == np.inf: return 0
+    
+    term1_sq = ((2 * mu) / (1 + mu**2))**2
+    term2 = ((1 - mu**2) / (1 + mu**2))**(2*m)
+    return term1_sq * term2
+
+# =============================================================================
+# 2. PARAMETER SIMULASI DARI ARTIKEL KUMAR ET AL. (2003)
+# =============================================================================
+
+# Parameter Serat SMF
+a_s_um = 2.2         # 
+delta_s = 0.002379   # 
+
+# Parameter Serat GI-MMF
+a_m_um = 25.0        # 
+delta_m = 0.008      # 
+
+# Pengaturan Simulasi
+wavelengths = np.linspace(0.6, 1.7, 200) # dalam mikrometer
+max_modes_to_plot = 5
+results = {m: [] for m in range(max_modes_to_plot)}
+
+# =============================================================================
+# 3. PERHITUNGAN DAYA MODAL VS PANJANG GELOMBANG
+# =============================================================================
+print("Menghitung daya modal untuk setiap panjang gelombang...")
+
+for wl_um in wavelengths:
+    # Hitung ukuran spot untuk kedua serat pada panjang gelombang saat ini
+    w_s = calculate_spot_size_smf(wl_um, a_s_um, delta_s)
+    w_m = calculate_spot_size_gimmf(wl_um, a_m_um, delta_m)
+    
+    # Hitung rasio ukuran spot
+    mu = w_s / w_m
+    
+    # Hitung daya untuk setiap mode
+    for m in range(max_modes_to_plot):
+        power = calculate_Am_power(mu, m)
+        results[m].append(power)
+
+print("Perhitungan selesai.")
+
+# =============================================================================
+# 4. VISUALISASI HASIL (MENIRU FIG. 3 DARI ARTIKEL)
+# =============================================================================
+
+fig, ax = plt.subplots(figsize=(10, 6.5))
+
+# Gaya garis untuk setiap mode agar sesuai dengan gambar
+linestyles = ['-', '--', ':', '-.', (0, (3, 1, 1, 1))]
+colors = ['black', 'darkblue', 'crimson', 'darkgreen', 'purple'] 
+
+for m in range(max_modes_to_plot):
+    ax.plot(wavelengths, results[m], 
+            label=f'm = {m}', 
+            linestyle=linestyles[m],
+            lw=2)
+
+# Pengaturan Judul, Label, dan Legenda
+ax.set_title(f"Variasi Daya Modal Fraksional ($|A_m|^2$) vs. Panjang Gelombang", fontsize=16)
+ax.set_xlabel("Panjang Gelombang (μm)", fontsize=12)
+ax.set_ylabel("Daya Modal Fraksional ($|A_m|^2$)", fontsize=12)
+ax.legend(title='Mode (m)', fontsize=11)
+ax.grid(True, which='both', linestyle='--', linewidth=0.5)
+
+# Mengatur batas plot agar sesuai dengan gambar
+ax.set_xlim(wavelengths.min(), wavelengths.max())
+ax.set_ylim(-0.05, 1.05)
+
+# plt.savefig("gambar_2_4_variasi_daya_moda_fraksional.png", dpi=300, bbox_inches='tight')
+
+plt.show()
