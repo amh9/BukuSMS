@@ -1,0 +1,177 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.special import jv, kn, jn_zeros
+from scipy.optimize import root_scalar
+from scipy.integrate import simpson
+
+# =============================================================================
+# FUNGSI-FUNGSI PEMBANTU (GABUNGAN DAN DIPERBAIKI DARI BAB 2 & 3)
+# =============================================================================
+
+# --- Fungsi Umum ---
+def sellemeier_silica(lambda_um):
+    """Menghitung indeks bias silika murni (fused silica)."""
+    lambda_sq = lambda_um**2
+    B = [0.6961663, 0.4079426, 0.8974794]
+    C_sq = [0.0684043**2, 0.1162414**2, 9.896161**2]
+    n_sq = 1.0
+    for b_val, c_sq_val in zip(B, C_sq):
+        n_sq += (b_val * lambda_sq) / (lambda_sq - c_sq_val)
+    return np.sqrt(n_sq)
+
+def calculate_v_number(lambda_m, a_m, n_core, n_cladding):
+    """Menghitung V-number."""
+    if n_core <= n_cladding: return 0
+    k0 = 2 * np.pi / lambda_m
+    na = np.sqrt(n_core**2 - n_cladding**2)
+    return k0 * a_m * na
+
+def get_spot_size_smf(lambda_m, a_s_m, n_core_s, n_clad_s):
+    """Menghitung spot size SMF menggunakan formula Marcuse."""
+    v_s = calculate_v_number(lambda_m, a_s_m, n_core_s, n_clad_s)
+    if 0.8 <= v_s <= 2.5:
+        ws_over_a = 0.65 + 1.619 / (v_s**1.5) + 2.879 / (v_s**6)
+        return ws_over_a * a_s_m
+    return np.nan
+
+# --- Fungsi Spesifik GI-MMF (dari Bab 2) ---
+def get_spot_size_mmf_gi(lambda_m, a_m_m, n_core_m, n_clad_m):
+    """Menghitung spot size untuk MMF Graded-Index."""
+    v_m = calculate_v_number(lambda_m, a_m_m, n_core_m, n_clad_m)
+    if v_m <= 0: return np.nan
+    return a_m_m * np.sqrt(2 / v_m)
+
+def calculate_transmission_gi(L_m, lambda_m, smf_params, gi_mmf_params):
+    """Menghitung coupling loss untuk struktur SMS GI-MMF."""
+    n_clad = sellemeier_silica(lambda_m * 1e6)
+    n_core_s = n_clad / np.sqrt(1 - 2 * smf_params['delta_s'])
+    n_core_m = n_clad / np.sqrt(1 - 2 * gi_mmf_params['delta_m'])
+    w_s = get_spot_size_smf(lambda_m, smf_params['a_s'], n_core_s, n_clad)
+    w_m = get_spot_size_mmf_gi(lambda_m, gi_mmf_params['a_m'], n_core_m, n_clad)
+    if np.isnan(w_s) or np.isnan(w_m): return np.nan
+    
+    mu = w_s / w_m
+    term1 = (2 * mu) / (1 + mu**2 + 1e-9)
+    term2 = (1 - mu**2) / (1 + mu**2 + 1e-9)
+    A_m_sq = np.array([(term1 * (term2**m))**2 for m in range(gi_mmf_params['num_modes'])])
+    
+    k0 = 2 * np.pi / lambda_m
+    delta_m_val = (n_core_m**2 - n_clad**2) / (2 * n_core_m**2)
+    m_indices = np.arange(gi_mmf_params['num_modes'])
+    inner_term = 1 - (2 * np.sqrt(2 * delta_m_val) * (2 * m_indices + 1)) / (gi_mmf_params['a_m'] * k0 * n_core_m)
+    beta_m = k0 * n_core_m * np.sqrt(np.maximum(0, inner_term))
+    
+    total_field = np.sum(A_m_sq * np.exp(-1j * beta_m * L_m))
+    P_SM = np.abs(total_field)**2
+    # PERBAIKAN: Menggunakan -10 * log10 untuk coupling loss
+    return 10 * np.log10(max(P_SM, 1e-9))
+
+# --- Fungsi Spesifik SI-MMF (dari Bab 3) ---
+def characteristic_equation_lp0m(U, V_num):
+    """Persamaan karakteristik transendental untuk mode LP0m."""
+    if U <= 1e-9 or U >= V_num: return np.inf
+    W = np.sqrt(V_num**2 - U**2)
+    return U * jv(1, U) * kn(0, W) - W * jv(0, U) * kn(1, W)
+
+def get_si_modes_and_coeffs(lambda_m, smf_params, si_mmf_params):
+    """
+    Pra-komputasi mode (beta) dan koefisien (c_m) untuk SI-MMF pada lambda tetap.
+    """
+    n_co, n_cl, a, num_modes = si_mmf_params['n_co'], si_mmf_params['n_cl'], si_mmf_params['a'], si_mmf_params['num_modes']
+    k0 = 2 * np.pi / lambda_m
+    V = k0 * a * np.sqrt(n_co**2 - n_cl**2)
+
+    # Dapatkan spot size SMF pada panjang gelombang ini
+    n_clad_s = sellemeier_silica(lambda_m * 1e6)
+    n_core_s = n_clad_s / np.sqrt(1 - 2 * smf_params['delta_s'])
+    w_s = get_spot_size_smf(lambda_m, smf_params['a_s'], n_core_s, n_clad_s)
+    if np.isnan(w_s): return None, None
+    
+    betas, mode_profiles, r_vec = [], [], np.linspace(0, a * 3, 1000)
+    j1_zeros = jn_zeros(1, num_modes)
+    for m in range(1, num_modes + 1):
+        bracket = [1e-6, jn_zeros(0,1)[0]-1e-6] if m == 1 else [j1_zeros[m-2]+1e-6, j1_zeros[m-1]-1e-6]
+        if bracket[1] >= V: continue
+        try:
+            sol = root_scalar(characteristic_equation_lp0m, args=(V,), bracket=bracket)
+            if sol.converged:
+                U=sol.root; W=np.sqrt(V**2-U**2); beta=np.sqrt((k0*n_co)**2-(U/a)**2)
+                field_profile=np.zeros_like(r_vec); field_profile[r_vec<=a]=jv(0,U*r_vec[r_vec<=a]/a)
+                scale_factor=jv(0,U)/kn(0,W); field_profile[r_vec>a]=scale_factor*kn(0,W*r_vec[r_vec>a]/a)
+                norm_const=np.sqrt(2*np.pi*simpson((field_profile**2)*r_vec,r_vec))
+                if norm_const > 1e-9:
+                    betas.append(beta); mode_profiles.append(field_profile/norm_const)
+        except(ValueError,RuntimeError): continue
+    
+    if not betas: return None, None
+
+    smf_profile = (1/(np.sqrt(np.pi)*w_s)) * np.exp(-0.5 * (r_vec / w_s)**2)
+    coeffs = np.array([2*np.pi*simpson(smf_profile*profile*r_vec,r_vec) for profile in mode_profiles])
+    
+    return np.array(betas), coeffs
+
+def calculate_si_loss_from_precomputed(L_m, betas, coeffs):
+    """Menghitung loss SI-MMF dari mode yang sudah dihitung sebelumnya."""
+    power = np.abs(np.sum(coeffs**2 * np.exp(1j * betas * L_m)))**2
+    # PERBAIKAN: Menggunakan -10 * log10 untuk coupling loss
+    return 10 * np.log10(max(power, 1e-9))
+
+# =============================================================================
+# PARAMETER SIMULASI
+# =============================================================================
+fixed_lambda_m = 1.55e-6
+
+gi_mmf_params = {'delta_m': 0.008, 'a_m': 25.0e-6, 'num_modes': 30}
+smf_params_for_gi = {'delta_s': 0.002379, 'a_s': 2.2e-6}
+
+si_mmf_params = {'n_co': 1.4446, 'n_cl': 1.4271, 'a': 52.5e-6, 'num_modes': 20}
+delta_s_wang = (1.4504**2 - 1.4447**2) / (2 * 1.4504**2)
+smf_params_for_si = {'delta_s': delta_s_wang, 'a_s': 4.15e-6} 
+
+mmf_lengths_cm = np.linspace(3.0, 5.0, 400)
+mmf_lengths_m = mmf_lengths_cm * 1e-2
+
+# =============================================================================
+# MENJALANKAN SIMULASI
+# =============================================================================
+print("Menjalankan simulasi...")
+
+# --- Perhitungan untuk GI-MMF ---
+print("  Menghitung loss untuk GI-MMF...")
+loss_gi = [calculate_transmission_gi(L, fixed_lambda_m, smf_params_for_gi, gi_mmf_params) for L in mmf_lengths_m]
+
+# --- Perhitungan untuk SI-MMF (dengan pra-komputasi) ---
+print("  Pra-komputasi mode dan koefisien untuk SI-MMF...")
+betas_si_fixed, coeffs_si_fixed = get_si_modes_and_coeffs(fixed_lambda_m, smf_params_for_si, si_mmf_params)
+
+loss_si = []
+if betas_si_fixed is not None:
+    print("  Menghitung loss untuk SI-MMF dengan mode yang sudah dihitung...")
+    loss_si = [calculate_si_loss_from_precomputed(L, betas_si_fixed, coeffs_si_fixed) for L in mmf_lengths_m]
+else:
+    print("  Gagal menghitung mode untuk SI-MMF.")
+    loss_si = [np.nan] * len(mmf_lengths_m)
+    
+print("Simulasi selesai.")
+
+# =============================================================================
+# MEMBUAT PLOT GAMBAR 4.4
+# =============================================================================
+fig, ax = plt.subplots(figsize=(10, 6))
+
+ax.plot(mmf_lengths_cm, loss_gi, 'b-', linewidth=2, label='SMS GI-MMF')
+ax.plot(mmf_lengths_cm, loss_si, 'r--', linewidth=2, label='SMS SI-MMF')
+
+ax.set_title(f'Perbandingan Coupling Loss vs. Panjang MMF (λ = {fixed_lambda_m*1e9:.0f} nm)', fontsize=16)
+ax.set_xlabel('Panjang MMF (cm)', fontsize=12)
+ax.set_ylabel('Coupling Loss (dB)', fontsize=12)
+ax.legend(fontsize=11)
+ax.grid(True, linestyle=':', alpha=0.7)
+ax.set_ylim(0, -40) 
+ax.invert_yaxis()
+
+plt.tight_layout()
+plt.savefig('Gambar_4_4_Panjang_Komparatif.png')
+plt.show()
+
+print("Plot telah disimpan sebagai 'Gambar_4_4_Panjang_Komparatif.png'")
