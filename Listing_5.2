@@ -1,0 +1,153 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.special import jv, kv, jn_zeros
+from scipy.optimize import root_scalar
+from scipy.integrate import simpson
+import time
+
+# --- 1. Pengaturan Tampilan Plot ---
+plt.style.use('seaborn-v0_8-whitegrid')
+plt.rcParams['font.family'] = 'serif'
+plt.rcParams['figure.dpi'] = 150
+
+# =============================================================================
+# 2. FUNGSI-FUNGSI FISIKA
+# =============================================================================
+
+# --- Fungsi untuk Model SMS GI-MMF (Berdasarkan Kumar et al.) ---
+def sellemeier_silica(lambda_um):
+    """Menghitung indeks bias silika murni (fused silica)."""
+    lambda_um_sq = lambda_um**2
+    B = [0.6961663, 0.4079426, 0.8974794]
+    C_sq = [0.0684043**2, 0.1162414**2, 9.896161**2]
+    n_sq = 1.0
+    for b_val, c_sq_val in zip(B, C_sq):
+        n_sq += (b_val * lambda_um_sq) / (lambda_um_sq - c_sq_val)
+    return np.sqrt(n_sq)
+
+def calculate_gi_transmission(L, wl_m, p):
+    """Menghitung transmisi P_SM untuk struktur GI-MMF."""
+    a_s, delta_s, a_m, delta_m, num_modes = p
+    wl_um = wl_m * 1e6
+    n_cl_s = sellemeier_silica(wl_um)
+    n_co_s = n_cl_s / np.sqrt(1 - 2 * delta_s)
+    V_s = (2 * np.pi * a_s / wl_m) * np.sqrt(n_co_s**2 - n_cl_s**2)
+    w_s = a_s * (0.65 + 1.619 / (V_s**1.5) + 2.879 / (V_s**6))
+    
+    n_cl_m = sellemeier_silica(wl_um)
+    n0_m = n_cl_m / np.sqrt(1 - 2 * delta_m)
+    V_m = (2 * np.pi * a_m / wl_m) * np.sqrt(n0_m**2 - n_cl_m**2)
+    if V_m <= 0: return 0
+    w_m = a_m * np.sqrt(2 / V_m)
+    
+    mu = w_s / w_m
+    total_field = 0j
+    for m in range(num_modes):
+        if np.isclose(mu, 1.0): Am_sq = 1.0 if m == 0 else 0.0
+        else: Am_sq = ((2*mu/(1+mu**2))**2) * (((1-mu**2)/(1+mu**2))**(2*m))
+        
+        k0_m = 2*np.pi/wl_m
+        term = 1 - (2*np.sqrt(2*delta_m)/(a_m*k0_m*n0_m))*(2*m+1)
+        if term < 0: continue
+        beta = k0_m * n0_m * np.sqrt(term)
+        total_field += Am_sq * np.exp(-1j * beta * L)
+            
+    return np.abs(total_field)**2
+
+# --- Fungsi untuk Model SMS SI-MMF (Berdasarkan Bab 3) ---
+def characteristic_equation_si(U, V):
+    """Persamaan karakteristik untuk mode LP0m pada serat SI."""
+    if U <= 1e-9 or U >= V: return np.inf
+    W = np.sqrt(V**2 - U**2)
+    return U * jv(1, U) * kv(0, W) - W * jv(0, U) * kv(1, W)
+
+def get_si_betas(params, num_modes):
+    """Menghitung hanya konstanta propagasi (beta) untuk serat SI."""
+    n_co, n_cl, a, lambda_0 = params['n_co'], params['n_cl'], params['a'], params['lambda_0']
+    k0 = 2 * np.pi / lambda_0
+    V = k0 * a * np.sqrt(n_co**2 - n_cl**2)
+    betas = []
+    for m in range(1, num_modes + 1):
+        if m == 1:
+            bracket = [1e-6, jn_zeros(0, 1)[0] - 1e-6]
+        else:
+            j1_zeros = jn_zeros(1, m)
+            bracket = [j1_zeros[m-2] + 1e-6, j1_zeros[m-1] - 1e-6]
+        if bracket[1] >= V: continue
+        try:
+            sol = root_scalar(characteristic_equation_si, args=(V,), bracket=bracket)
+            if sol.converged:
+                U = sol.root
+                betas.append(np.sqrt((k0 * n_co)**2 - (U / a)**2))
+        except ValueError: continue
+    return np.array(betas)
+
+# =============================================================================
+# 3. PARAMETER DAN PERHITUNGAN SIMULASI
+# =============================================================================
+
+# Parameter Umum
+fixed_lambda_m = 1.55e-6
+mmf_lengths_m = np.linspace(0.048, 0.052, 501) # Rentang 4.8 cm - 5.2 cm
+num_modes_gi = 30
+num_modes_si = 15
+
+# Parameter untuk GI-MMF (dari Kumar et al.)
+gi_params = [2.2e-6, 0.002379, 25.0e-6, 0.008, num_modes_gi]
+
+# Parameter untuk SI-MMF (dari Wang et al.)
+si_params = {'n_co': 1.4446, 'n_cl': 1.4271, 'a': 52.5e-6, 'lambda_0': fixed_lambda_m}
+
+# --- Perhitungan untuk GI-MMF ---
+print("1. Menghitung respons sensor untuk GI-MMF...")
+start_time = time.time()
+T_gi = np.array([calculate_gi_transmission(L, fixed_lambda_m, gi_params) for L in mmf_lengths_m])
+loss_gi = 10 * np.log10(T_gi, where=(T_gi > 1e-9), out=np.full_like(T_gi, 90.0))
+print(f"   Selesai dalam {time.time() - start_time:.2f} detik.")
+
+# --- Perhitungan untuk SI-MMF (lebih intensif) ---
+print("2. Menghitung respons sensor untuk SI-MMF (ini mungkin memakan waktu)...")
+start_time = time.time()
+# Pra-perhitungan beta dan koefisien eksitasi untuk SI
+betas_si, mmf_profiles_si, r_vec_si = get_si_modes(si_params, num_modes_si)
+smf_profile = (1/(np.sqrt(np.pi)*4.1e-6)) * np.exp(-0.5*(r_vec_si/4.1e-6)**2)
+coeffs_si = np.array([2*np.pi*simpson(smf_profile*prof*r_vec_si, r_vec_si) for prof in mmf_profiles_si])
+# Hitung loss
+T_si = np.array([np.abs(np.sum(coeffs_si**2 * np.exp(1j * betas_si * L)))**2 for L in mmf_lengths_m])
+loss_si = 10 * np.log10(T_si, where=(T_si > 1e-9), out=np.full_like(T_si, 90.0))
+print(f"   Selesai dalam {time.time() - start_time:.2f} detik.")
+
+# =============================================================================
+# 4. VISUALISASI HASIL
+# =============================================================================
+print("3. Membuat plot perbandingan...")
+fig, ax = plt.subplots(figsize=(10, 7))
+
+# Plot kedua kurva
+ax.plot(mmf_lengths_m * 100, loss_gi, color='darkblue', linestyle='--', lw=2, label='SMS GI-MMF')
+ax.plot(mmf_lengths_m * 100, loss_si, color='firebrick', linestyle='-', lw=1.5, label='SMS SI-MMF')
+
+# Anotasi untuk menyoroti perbedaan utama
+ax.annotate('Respons Halus & Periodik\n(Sensitivitas Lebih Rendah)',
+            xy=(5.1, -1.8), xytext=(4.85, -5),
+            arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=-0.2", color='darkblue'),
+            ha='center', va='center', fontsize=11, bbox=dict(boxstyle='round,pad=0.3', fc='aliceblue', alpha=0.9))
+
+ax.annotate('Respons Tajam & Kompleks\n(Sensitivitas Potensial Tinggi)',
+            xy=(5.0, -20), xytext=(5.05, -10),
+            arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=0.2", color='firebrick'),
+            ha='left', va='center', fontsize=11, bbox=dict(boxstyle='round,pad=0.3', fc='lightcoral', alpha=0.8))
+
+# Pengaturan Judul, Label, dan Legenda
+ax.set_title('Simulasi Komparatif Respons Sensor Intensitas (GI vs. SI)', fontsize=14, weight='bold')
+ax.set_xlabel('Panjang MMF (cm)', fontsize=12)
+ax.set_ylabel('Coupling Loss (dB)', fontsize=12)
+ax.legend(loc='lower right')
+ax.grid(True, linestyle=':', which='both')
+ax.set_ylim(-35, 0)
+
+plt.tight_layout()
+plt.savefig("gambar_5_simulasi_sensor_komparatif.png", dpi=300)
+plt.show()
+
+print("Plot telah disimpan sebagai 'gambar_5_simulasi_sensor_komparatif.png'")
