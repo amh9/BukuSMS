@@ -4,7 +4,7 @@ Repositori ini berisi koleksi lengkap kode simulasi Python yang menyertai buku a
 
 Serat Optik Berstruktur Singlemode-Multimode-Singlemode (SMS): Teori Interferensi Multimode dan Aplikasinya melalui Simulasi Python
 
-oleh Agus Muhamad Hatta, Institut Teknologi Sepuluh Nopember (ITS).
+oleh Agus Muhamad Hatta dan Sekartedjo, Institut Teknologi Sepuluh Nopember (ITS).
 
 
 Tentang Buku
